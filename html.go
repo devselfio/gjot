@@ -1,0 +1,426 @@
+package gjot
+
+import (
+	"io"
+	"strings"
+)
+
+// WalkStatus is what a Hook's entering call returns to control rendering of
+// the node's children.
+type WalkStatus int
+
+const (
+	// WalkContinue renders the children between the entering and exit calls.
+	WalkContinue WalkStatus = iota
+	// WalkSkipChildren leaves the children unrendered.
+	WalkSkipChildren
+)
+
+// Hook renders a div or span in place of the default markup. It is called
+// with entering true before the children and entering false after them;
+// the exit call's WalkStatus is ignored. Returning an error aborts the
+// render and HTML returns it.
+type Hook func(w io.Writer, n *Node, entering bool) (WalkStatus, error)
+
+// WithHook registers h for every div or span that has class. When a node
+// has several registered classes, the first in its class list wins.
+func WithHook(class string, h Hook) HTMLOption {
+	return func(r *renderer) {
+		if r.hooks == nil {
+			r.hooks = map[string]Hook{}
+		}
+		r.hooks[class] = h
+	}
+}
+
+// renderer writes a Node tree as HTML into out. The first hook error stops
+// all further output.
+type renderer struct {
+	out   []byte
+	hooks map[string]Hook
+	err   error
+}
+
+func (r *renderer) w(s string) { r.out = append(r.out, s...) }
+
+// Write makes the renderer the io.Writer hooks render into.
+func (r *renderer) Write(p []byte) (int, error) {
+	r.out = append(r.out, p...)
+	return len(p), nil
+}
+
+func (r *renderer) children(n *Node) {
+	for _, c := range n.Children {
+		r.render(c)
+	}
+}
+
+func (r *renderer) hookFor(n *Node) Hook {
+	for _, c := range n.classList() {
+		if h, ok := r.hooks[c]; ok {
+			return h
+		}
+	}
+	return nil
+}
+
+func (r *renderer) renderHooked(h Hook, n *Node) {
+	status, err := h(r, n, true)
+	if err != nil {
+		r.err = err
+		return
+	}
+	if status != WalkSkipChildren {
+		r.children(n)
+	}
+	if r.err != nil {
+		return
+	}
+	if _, err := h(r, n, false); err != nil {
+		r.err = err
+	}
+}
+
+func (r *renderer) render(n *Node) {
+	if r.err != nil {
+		return
+	}
+	if n.Tag == Div || n.Tag == Span {
+		if h := r.hookFor(n); h != nil {
+			r.renderHooked(h, n)
+			return
+		}
+	}
+	switch n.Tag {
+	case Section:
+		if n.Level > 0 {
+			r.w("<section")
+			r.attrs(n)
+			r.w(">\n")
+			r.children(n)
+			r.w("</section>\n")
+		} else {
+			r.children(n)
+		}
+	case Para:
+		r.w("<p")
+		r.attrs(n)
+		r.w(">")
+		r.children(n)
+		r.w("</p>\n")
+	case Heading:
+		tag := "h6"
+		if n.Level >= 1 && n.Level <= 6 {
+			tag = "h" + string(rune('0'+n.Level))
+		}
+		r.w("<" + tag)
+		r.attrs(n)
+		r.w(">")
+		r.children(n)
+		r.w("</" + tag + ">\n")
+	case ThematicBreak:
+		r.w("<hr")
+		r.attrs(n)
+		r.w(">\n")
+	case CodeBlock:
+		r.w("<pre")
+		r.attrs(n)
+		r.w("><code")
+		if n.Lang != "" {
+			r.w(" class=\"language-")
+			r.attrEsc(n.Lang)
+			r.w("\"")
+		}
+		r.w(">")
+		r.esc(n.Text)
+		r.w("</code></pre>\n")
+	case BlockQuote:
+		r.w("<blockquote")
+		r.attrs(n)
+		r.w(">\n")
+		r.children(n)
+		r.w("</blockquote>\n")
+	case Div:
+		r.w("<div")
+		r.attrs(n)
+		r.w(">\n")
+		r.children(n)
+		r.w("</div>\n")
+	case BulletList:
+		r.w("<ul")
+		r.attrs(n)
+		r.w(">\n")
+		r.listItems(n)
+		r.w("</ul>\n")
+	case OrderedList:
+		r.w("<ol")
+		r.attrs(n)
+		r.w(">\n")
+		r.listItems(n)
+		r.w("</ol>\n")
+	case TaskList:
+		r.w("<ul class=\"task-list\"")
+		r.attrs(n)
+		r.w(">\n")
+		r.listItems(n)
+		r.w("</ul>\n")
+	case ListItem:
+		r.w("<li")
+		if n.ID != "" {
+			r.w(" id=\"")
+			r.attrEsc(n.ID)
+			r.w("\"")
+		}
+		r.w(">\n")
+		r.children(n)
+		r.w("</li>\n")
+	case TaskListItem:
+		r.w("<li>\n")
+		r.children(n)
+		r.w("</li>\n")
+	case DefinitionList:
+		r.w("<dl")
+		r.attrs(n)
+		r.w(">\n")
+		r.children(n)
+		r.w("</dl>\n")
+	case Term:
+		r.w("<dt>")
+		r.children(n)
+		r.w("</dt>\n")
+	case Definition:
+		r.w("<dd>\n")
+		r.children(n)
+		r.w("</dd>\n")
+	case Table:
+		r.w("<table")
+		r.attrs(n)
+		r.w(">\n")
+		r.children(n)
+		r.w("</table>\n")
+	case Caption:
+		r.w("<caption>")
+		r.children(n)
+		r.w("</caption>\n")
+	case Row:
+		r.w("<tr>\n")
+		r.children(n)
+		r.w("</tr>\n")
+	case Cell:
+		tag := "td"
+		if n.Head {
+			tag = "th"
+		}
+		r.w("<" + tag)
+		if n.Align != "" && n.Align != AlignDefault {
+			r.w(" style=\"text-align: " + string(n.Align) + ";\"")
+		}
+		r.w(">")
+		r.children(n)
+		r.w("</" + tag + ">\n")
+	case Footnote:
+		r.w("<section role=\"doc-endnotes\">\n<hr>\n<ol>\n")
+		r.children(n)
+		r.w("</ol>\n</section>\n")
+	case Str, Escape:
+		r.esc(n.Text)
+	case SoftBreak:
+		r.w("\n")
+	case HardBreak:
+		r.w("<br>\n")
+	case Emph:
+		r.wrap("em", n)
+	case Strong:
+		r.wrap("strong", n)
+	case Verbatim:
+		r.w("<code")
+		r.attrs(n)
+		r.w(">")
+		r.esc(n.Text)
+		r.w("</code>")
+	case Link:
+		r.w("<a")
+		if n.Destination != nil {
+			r.w(" href=\"")
+			r.attrEsc(*n.Destination)
+			r.w("\"")
+		}
+		r.attrs(n)
+		r.w(">")
+		if len(n.Children) > 0 {
+			r.children(n)
+		} else {
+			r.esc(n.Text)
+		}
+		r.w("</a>")
+	case Image:
+		r.w("<img alt=\"")
+		r.altText(n.Children)
+		r.w("\"")
+		if n.Destination != nil {
+			r.w(" src=\"")
+			r.attrEsc(*n.Destination)
+			r.w("\"")
+		}
+		r.attrs(n)
+		r.w(">")
+	case Span:
+		r.w("<span")
+		r.attrs(n)
+		r.w(">")
+		r.children(n)
+		r.w("</span>")
+	case FootnoteReference:
+		r.w("<a")
+		if n.ID != "" {
+			r.w(" id=\"")
+			r.attrEsc(n.ID)
+			r.w("\"")
+		}
+		if n.Destination != nil {
+			r.w(" href=\"")
+			r.attrEsc(*n.Destination)
+			r.w("\"")
+		}
+		r.w(" role=\"doc-noteref\"><sup>")
+		r.esc(n.Text)
+		r.w("</sup></a>")
+	case Superscript:
+		r.wrap("sup", n)
+	case Subscript:
+		r.wrap("sub", n)
+	case Insert:
+		r.wrap("ins", n)
+	case Delete:
+		r.wrap("del", n)
+	case Mark:
+		r.wrap("mark", n)
+	case InlineMath:
+		r.w("<span class=\"math inline\">\\(")
+		r.esc(n.Text)
+		r.w("\\)</span>")
+	case DisplayMath:
+		r.w("<span class=\"math display\">\\[")
+		r.esc(n.Text)
+		r.w("\\]</span>")
+	case URL:
+		r.w("<a href=\"")
+		r.attrEsc(n.Text)
+		r.w("\">")
+		r.esc(n.Text)
+		r.w("</a>")
+	case Email:
+		r.w("<a href=\"mailto:")
+		r.attrEsc(n.Text)
+		r.w("\">")
+		r.esc(n.Text)
+		r.w("</a>")
+	case Symb:
+		r.w("<span class=\"symbol\">")
+		r.esc(n.Text)
+		r.w("</span>")
+	case DoubleQuoted:
+		r.w("\u201c")
+		r.children(n)
+		r.w("\u201d")
+	case SingleQuoted:
+		r.w("\u2018")
+		r.children(n)
+		r.w("\u2019")
+	case NonBreakingSpace:
+		r.w("&nbsp;")
+	case LeftSingleQuote:
+		r.w("\u2018")
+	case RightSingleQuote:
+		r.w("\u2019")
+	case LeftDoubleQuote:
+		r.w("\u201c")
+	case RightDoubleQuote:
+		r.w("\u201d")
+	case Ellipsis:
+		r.w("\u2026")
+	case EmDash:
+		r.w("\u2014")
+	case EnDash:
+		r.w("\u2013")
+	case RawInline, RawBlock:
+		if n.Lang == "html" {
+			r.w(n.Text)
+		}
+	default:
+		r.children(n)
+	}
+}
+
+func (r *renderer) wrap(tag string, n *Node) {
+	r.w("<" + tag)
+	r.attrs(n)
+	r.w(">")
+	r.children(n)
+	r.w("</" + tag + ">")
+}
+
+func (r *renderer) altText(children []*Node) {
+	for _, c := range children {
+		switch c.Tag {
+		case Str:
+			r.attrEsc(c.Text)
+		case SoftBreak:
+			r.w(" ")
+		default:
+			r.altText(c.Children)
+		}
+	}
+}
+
+func (r *renderer) listItems(list *Node) {
+	for _, item := range list.Children {
+		r.w("<li>\n")
+		if item.Tag == TaskListItem {
+			if item.Checked != nil && *item.Checked {
+				r.w("<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n")
+			} else {
+				r.w("<input disabled=\"\" type=\"checkbox\"/>\n")
+			}
+		}
+		for _, c := range item.Children {
+			if list.Tight && c.Tag == Para {
+				r.children(c)
+				r.w("\n")
+			} else {
+				r.render(c)
+			}
+		}
+		r.w("</li>\n")
+	}
+}
+
+// attrs writes id, attrs, and classes; a "class" attr takes precedence over
+// the classes field.
+func (r *renderer) attrs(n *Node) {
+	if n.ID != "" {
+		r.w(" id=\"")
+		r.attrEsc(n.ID)
+		r.w("\"")
+	}
+	r.attrList(n.Attrs)
+	if !hasKey(n.Attrs, "class") && n.Classes != "" {
+		r.w(" class=\"")
+		r.attrEsc(n.Classes)
+		r.w("\"")
+	}
+}
+
+func (r *renderer) attrList(attrs []Attr) {
+	for _, a := range attrs {
+		r.w(" " + a.Key + "=\"")
+		r.attrEsc(a.Value)
+		r.w("\"")
+	}
+}
+
+var htmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+var attrEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;")
+
+func (r *renderer) esc(text string)     { r.w(htmlEscaper.Replace(text)) }
+func (r *renderer) attrEsc(text string) { r.w(attrEscaper.Replace(text)) }
