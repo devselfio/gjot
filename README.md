@@ -100,6 +100,10 @@ byte from zjot (see `testdata/spec/ORIGIN.md`): 261 cases pass, the 3 cases of
 re-parses every case through `Djot` and compares the HTML again. `TestJSONRoundTrip`
 does the same through JSON.
 
+`go run ./cmd/driftcheck` compares that corpus with zjot's at the ref pinned in
+`ORIGIN.md` and exits non-zero naming each file that differs. It needs the
+network, so it is not part of `go test`.
+
 ## Architecture
 
 gjot is a single-phase recursive descent parser, file for file the shape of
@@ -121,4 +125,5 @@ ast.go           AST text renderer
 writer.go        Djot writer
 spec_test.go     Corpus runner
 cmd/gjot         CLI
+cmd/driftcheck   Corpus drift check against zjot
 ```
