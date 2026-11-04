@@ -285,3 +285,25 @@ func TestRunUsage(t *testing.T) {
 		t.Errorf("-bogus: code %d", code)
 	}
 }
+
+// A gzip stream that is truncated before its trailer or whose CRC is wrong
+// must be rejected as a bad archive, not compared as if it were complete.
+func TestRunBadGzipTrailer(t *testing.T) {
+	good := corpusTar(t, "root", map[string]string{"a.test": "A"})
+	missing := good[:len(good)-8]
+	badCRC := append([]byte(nil), good...)
+	badCRC[len(badCRC)-8] ^= 1
+	for name, body := range map[string][]byte{"missing trailer": missing, "bad crc": badCRC} {
+		t.Run(name, func(t *testing.T) {
+			s := serve(t, map[string][]byte{"r1": body})
+			dir := writeDir(t, s.URL, "r1", map[string]string{"a.test": "A"})
+			var out, errb bytes.Buffer
+			if code := run([]string{"-dir", dir}, s.Client(), &out, &errb); code != 2 {
+				t.Fatalf("code %d, stdout %q, stderr %q", code, out.String(), errb.String())
+			}
+			if !strings.Contains(errb.String(), "bad archive") || out.Len() != 0 {
+				t.Errorf("stderr %q stdout %q", errb.String(), out.String())
+			}
+		})
+	}
+}
