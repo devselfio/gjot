@@ -135,6 +135,11 @@ func readCorpusTar(r io.Reader) (map[string][]byte, error) {
 		}
 		out[parts[2]] = b
 	}
+	// The tar ends before the gzip stream does. Read to gzip's EOF so its
+	// trailer (CRC and length) is verified; Close would not do that.
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return nil, fmt.Errorf("bad archive: %w", err)
+	}
 	return out, nil
 }
 
