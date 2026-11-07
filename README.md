@@ -84,8 +84,9 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text. Source positions are kept only
-when parsed with `WithSourcePos`, and are recorded for paragraphs and text at
-any nesting depth.
+when parsed with `WithSourcePos`. Paragraphs and lists carry them at any
+nesting depth, as does every inline node inside a paragraph; headings,
+sections, block quotes, divs, tables and the other blocks do not yet.
 
 Two things the writer cannot express, because the syntax has no form for them:
 an empty verbatim span in the middle of a paragraph (it is written as a trailing
