@@ -2,8 +2,9 @@
 
 A [Djot](https://djot.net/) library for Go: parser, HTML renderer with a
 div/span hook, Djot writer, and a JSON-serialisable AST. gjot is a port of
-[zjot](https://github.com/quiteclose/zjot) and passes the 261 test cases of
-the canonical [djot.js](https://github.com/jgm/djot.js) suite that zjot vendors.
+[zjot](https://github.com/quiteclose/zjot) and is tested against the corpus
+zjot ships: the canonical [djot.js](https://github.com/jgm/djot.js) suite it
+vendors, at the ref pinned in `testdata/spec/ORIGIN.md`.
 
 ## Build
 
@@ -94,11 +95,32 @@ unclosed backtick) and math whose content starts or ends with a backtick.
 go test ./...
 ```
 
-`TestSpec` runs the 26 `.test` files under `testdata/spec/`, vendored byte for
-byte from zjot (see `testdata/spec/ORIGIN.md`): 261 cases pass, the 3 cases of
-`filters.test` skip because they need a Lua filter. `TestWriterRoundTripsCorpus`
-re-parses every case through `Djot` and compares the HTML again. `TestJSONRoundTrip`
-does the same through JSON.
+`TestSpec` runs the `.test` files under `testdata/spec/`, vendored byte for
+byte from zjot at the ref pinned in `testdata/spec/ORIGIN.md`. Each case must
+render its expected output, and must render it again after being written back
+to Djot by `Djot` and re-parsed (for AST cases, the AST must not change). The 3
+cases of `filters.test` skip because they need a Lua filter.
+
+`testdata/spec/known-failures.txt` lists the cases gjot does not yet pass, one
+per line as `<file>.test L<line>`, the line being that of the case's opening
+fence (e.g. `zjot.test L1234`), sorted by file then line; `#` comments and blank
+lines are allowed. Against that list:
+
+- a listed case that fails is reported as a known failure (a skipped subtest
+  with the entry and the diff) and does not fail the run;
+- a listed case that passes fails the run, naming the entry to delete;
+- an unlisted case that fails fails the run, naming the entry it would need;
+- an entry that names no case fails the run.
+
+The list only shrinks. The pass count is what the run prints, not a number kept
+here:
+
+```
+go test -run 'TestSpec$' -v . | grep 'corpus:'
+```
+
+`TestJSONRoundTrip` marshals every case's AST to JSON and back and compares the
+AST text, with and without source positions.
 
 `go run ./cmd/driftcheck` compares that corpus with zjot's at the ref pinned in
 `ORIGIN.md` and exits non-zero naming each file that differs. It needs the
@@ -123,7 +145,7 @@ linemap.go       Source position mapping for joined inline text
 html.go          HTML renderer and the class hook
 ast.go           AST text renderer
 writer.go        Djot writer
-spec_test.go     Corpus runner
+spec_test.go     Corpus runner, judged against testdata/spec/known-failures.txt
 cmd/gjot         CLI
 cmd/driftcheck   Corpus drift check against zjot
 ```
