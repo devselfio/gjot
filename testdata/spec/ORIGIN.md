@@ -1,12 +1,12 @@
 # Corpus origin
 
-The `*.test` files in this directory are the djot.js test suite as vendored
-by zjot, copied byte for byte from the `test/` directory of the repository
-below at the ref below. They are never edited here: a failing case is a
-parser bug, not a fixture bug.
+The `*.test` files in this directory are zjot's `test/*.test` at the tag
+below: the 26 djot.js suite files zjot vendors plus its own `grid.test` and
+`zjot.test`, 28 files, copied byte for byte from the repository below. They
+are never edited here: a failing case is a parser bug, not a fixture bug.
 
 Repository: https://github.com/quiteclose/zjot
-Ref: ae01cd4
+Ref: v2.0.0
 
 The drift check fetches that ref and exits non-zero when any `*.test` file
 here was added, removed or changed upstream. Run it in CI and whenever
@@ -17,10 +17,9 @@ either corpus changes:
 To measure the gap to another ref without moving the pin, name the ref;
 nothing is written:
 
-    go run ./cmd/driftcheck v2.0.0
+    go run ./cmd/driftcheck main
 
-The pin is a commit, not a tag, only until the re-sync to zjot 2.0.0 moves it
-to `v2.0.0` together with the files (constraints: corpora are pinned to tags
-except briefly during cross-repo work).
+`known-failures.txt` beside the corpus lists the cases gjot does not yet
+pass and is read by `TestSpec`; see the README.
 
 `filters.test` needs a Lua filter and its cases are skipped by the runner.
