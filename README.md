@@ -13,6 +13,7 @@ Requires Go 1.26 or later.
 
 ```
 go build ./...
+make build      # the same, as CI runs it
 ```
 
 ## CLI usage
@@ -94,7 +95,12 @@ unclosed backtick) and math whose content starts or ends with a backtick.
 
 ```
 go test ./...
+make test       # the same, as CI runs it
+make check      # gofmt (fails listing unformatted files), go vet, go mod tidy -diff
 ```
+
+CI runs `make check`, `make build`, `make test` and `make spec-count` on every
+push to `main` and every pull request. `make help` lists the targets.
 
 `TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
 of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
@@ -119,6 +125,8 @@ The list only shrinks. The pass count is what the run prints, not a number kept
 here:
 
 ```
+make spec-count
+# or, without make:
 go test -run 'TestSpec$' -v . | grep 'corpus:'
 ```
 
