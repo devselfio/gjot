@@ -131,7 +131,13 @@ type Node struct {
 	// idText is the raw source a heading's auto id and implicit reference
 	// derive from. Parse-time only.
 	idText string
+	// src is the node's extent in the inline source. Parse-time only.
+	src srcSpan
 }
+
+// srcSpan is a byte range [start, end) in the inline source a node was
+// parsed from; end == 0 means the node has none.
+type srcSpan struct{ start, end int }
 
 // classList is the classes the node renders with: a "class" attribute
 // replaces the Classes field, as it does in the HTML output.

@@ -272,18 +272,6 @@ func (p *parser) buildInlineLineMap(textLines []string, startLine int) lineMap {
 	return m
 }
 
-// applyInlinePositions sets positions on the top-level text nodes of a
-// paragraph from their offsets in the joined source.
-func applyInlinePositions(nodes []*Node, m lineMap) {
-	for _, n := range nodes {
-		if n.Tag != Str || n.Text == "" || n.off == 0 {
-			continue
-		}
-		off := n.off - 1
-		n.Pos = &Range{Start: m.resolve(off), End: m.resolve(off + len(n.Text) - 1)}
-	}
-}
-
 func (p *parser) tryHeading() *Node {
 	line := p.lines[p.pos]
 	trimmed := strings.TrimLeft(line, " \t")
