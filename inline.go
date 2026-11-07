@@ -857,7 +857,8 @@ func applyAttrsToResolved(nodes []*Node, ba blockAttrs) []*Node {
 			spanChildren = append(spanChildren, tail(last, wordStart))
 		}
 
-		span := &Node{Tag: Span, Children: spanChildren, src: childrenSpan(spanChildren)}
+		s := childrenSpan(spanChildren)
+		span := at(&Node{Tag: Span, Children: spanChildren}, s.start, s.end)
 		applyBlockAttrs(span, ba)
 
 		switch {
