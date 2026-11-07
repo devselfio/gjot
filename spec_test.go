@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -139,7 +138,12 @@ func TestSpec(t *testing.T) {
 		t.Fatal("no testdata/spec/*.test files found")
 	}
 	known := loadKnownFailures(t)
-	seen := make(map[caseID]bool)
+	// corpus holds every non-filter case of every file. It is filled here,
+	// outside the subtests, so a -run filter does not shrink it and make
+	// real entries look stale.
+	corpus := make(map[caseID]bool)
+	// total and the other counters are only bumped inside subtests that
+	// run, so under -run the count line describes the cases selected.
 	var total, passing, knownFailing, skipped int
 	for _, file := range files {
 		base := filepath.Base(file)
@@ -147,16 +151,21 @@ func TestSpec(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		cases := parseSpecFile(string(content))
+		for _, c := range cases {
+			if !c.filter {
+				corpus[caseID{base, c.line}] = true
+			}
+		}
 		t.Run(strings.TrimSuffix(base, ".test"), func(t *testing.T) {
-			for _, c := range parseSpecFile(string(content)) {
-				total++
+			for _, c := range cases {
 				t.Run(fmt.Sprintf("L%d", c.line), func(t *testing.T) {
+					total++
 					if c.filter {
 						skipped++
 						t.Skip("lua filter")
 					}
 					id := caseID{base, c.line}
-					seen[id] = true
 					err := checkCase(c)
 					switch classify(known[id], err) {
 					case passed:
@@ -173,22 +182,7 @@ func TestSpec(t *testing.T) {
 			}
 		})
 	}
-	var stale []caseID
-	for id := range known {
-		if !seen[id] {
-			stale = append(stale, id)
-		}
-	}
-	slices.SortFunc(stale, func(a, b caseID) int {
-		if a.less(b) {
-			return -1
-		}
-		if b.less(a) {
-			return 1
-		}
-		return 0
-	})
-	for _, id := range stale {
+	for _, id := range staleEntries(known, corpus) {
 		t.Errorf("%s names no case; delete it from %s", id, knownFailuresPath)
 	}
 	t.Logf("corpus: %d of %d cases pass, %d known failing, %d skipped (lua filter)",

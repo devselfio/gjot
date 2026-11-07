@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -115,6 +116,29 @@ func classify(listed bool, err error) outcome {
 	}
 }
 
+// staleEntries returns, sorted, the entries of known that name no case in
+// corpus, the set of every non-filter case in the corpus files. corpus is
+// built from the files themselves, not from the subtests that ran, so a
+// narrower -run does not make real entries look stale.
+func staleEntries(known, corpus map[caseID]bool) []caseID {
+	var stale []caseID
+	for id := range known {
+		if !corpus[id] {
+			stale = append(stale, id)
+		}
+	}
+	slices.SortFunc(stale, func(a, b caseID) int {
+		if a.less(b) {
+			return -1
+		}
+		if b.less(a) {
+			return 1
+		}
+		return 0
+	})
+	return stale
+}
+
 func TestParseKnownFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -187,5 +211,23 @@ func TestClassify(t *testing.T) {
 		if got := classify(tt.listed, tt.err); got != tt.want {
 			t.Errorf("classify(%v, %v) = %v, want %v", tt.listed, tt.err, got, tt.want)
 		}
+	}
+}
+
+func TestStaleEntries(t *testing.T) {
+	corpus := map[caseID]bool{{"para.test", 1}: true, {"zjot.test", 9}: true}
+	known := map[caseID]bool{
+		{"zjot.test", 10}:   true, // no such case
+		{"para.test", 1}:    true,
+		{"filters.test", 3}: true, // a lua-filter case is not in corpus
+		{"zjot.test", 9}:    true,
+	}
+	got := staleEntries(known, corpus)
+	want := []caseID{{"filters.test", 3}, {"zjot.test", 10}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got := staleEntries(map[caseID]bool{}, corpus); len(got) != 0 {
+		t.Errorf("empty list: got %v, want none", got)
 	}
 }
