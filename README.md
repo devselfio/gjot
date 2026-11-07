@@ -3,8 +3,9 @@
 A [Djot](https://djot.net/) library for Go: parser, HTML renderer with a
 div/span hook, Djot writer, and a JSON-serialisable AST. gjot is a port of
 [zjot](https://github.com/quiteclose/zjot) and is tested against the corpus
-zjot ships: the canonical [djot.js](https://github.com/jgm/djot.js) suite it
-vendors, at the ref pinned in `testdata/spec/ORIGIN.md`.
+zjot ships: the 28 `.test` files of zjot v2.0.0 (the 26
+[djot.js](https://github.com/jgm/djot.js) suite files it vendors plus its own
+`grid.test` and `zjot.test`), pinned in `testdata/spec/ORIGIN.md`.
 
 ## Build
 
@@ -95,11 +96,13 @@ unclosed backtick) and math whose content starts or ends with a backtick.
 go test ./...
 ```
 
-`TestSpec` runs the `.test` files under `testdata/spec/`, vendored byte for
-byte from zjot at the ref pinned in `testdata/spec/ORIGIN.md`. Each case must
-render its expected output, and must render it again after being written back
-to Djot by `Djot` and re-parsed (for AST cases, the AST must not change). The 3
-cases of `filters.test` skip because they need a Lua filter.
+`TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
+of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
+and `zjot.test`), vendored byte for byte and pinned in
+`testdata/spec/ORIGIN.md`. Each case must render its expected output, and must
+render it again after being written back to Djot by `Djot` and re-parsed (for
+AST cases, the AST must not change). The 3 cases of `filters.test` skip because
+they need a Lua filter.
 
 `testdata/spec/known-failures.txt` lists the cases gjot does not yet pass, one
 per line as `<file>.test L<line>`, the line being that of the case's opening
