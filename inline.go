@@ -18,8 +18,10 @@ const (
 type openerInfo struct {
 	char    byte
 	itemIdx int
-	srcPos  int
-	marked  bool
+	// srcPos is where the opener starts in the inline source: the "{" of
+	// a braced opener, else the delimiter itself.
+	srcPos int
+	marked bool
 }
 
 type inlineItem struct {
@@ -59,11 +61,25 @@ func lit(text string) *Node {
 	return &Node{Tag: Str, Text: text}
 }
 
-// tail returns a text node for n.Text[start:], keeping the source offset.
+// at records n's extent [start, end) in the inline source and returns n.
+func at(n *Node, start, end int) *Node {
+	n.src = srcSpan{start, end}
+	return n
+}
+
+// tail returns a text node for n.Text[start:], keeping the source offset of
+// a slice or the extent of a literal. A literal whose text is not its source
+// bytes (a smart quote) keeps its whole extent, since its text cannot be
+// mapped byte for byte.
 func tail(n *Node, start int) *Node {
 	t := &Node{Tag: Str, Text: n.Text[start:]}
-	if n.off > 0 {
+	switch {
+	case n.off > 0:
 		t.off = n.off + start
+	case n.src.end > 0 && start > 0 && n.src.end-n.src.start == len(n.Text):
+		t.src = srcSpan{n.src.start + start, n.src.end}
+	default:
+		t.src = n.src
 	}
 	return t
 }
@@ -77,21 +93,17 @@ func (p *inlineParser) pushOpener(op openerInfo) {
 	p.items = append(p.items, inlineItem{kind: itemOpener, opener: op})
 }
 
-// addText appends text, extending the previous node when both are adjacent
-// slices of the source (off < 0 marks text that is not).
+// addText appends the source slice text at off, extending the previous node
+// when both are adjacent slices of the source.
 func (p *inlineParser) addText(text string, off int) {
 	if n := len(p.items); n > 0 && p.items[n-1].kind == itemNode {
 		last := p.items[n-1].node
-		if last.Tag == Str && off >= 0 && last.off > 0 && last.off-1+len(last.Text) == off {
+		if last.Tag == Str && last.off > 0 && last.off-1+len(last.Text) == off {
 			last.Text = p.src[last.off-1 : off+len(text)]
 			return
 		}
 	}
-	if off < 0 {
-		p.pushNode(lit(text))
-	} else {
-		p.pushNode(strNode(text, off))
-	}
+	p.pushNode(strNode(text, off))
 }
 
 func (p *inlineParser) flushText() {
@@ -100,11 +112,13 @@ func (p *inlineParser) flushText() {
 	}
 }
 
-// closeAt wraps the items after opener itemIdx in a node of tag and drops
-// openers from index i up.
-func (p *inlineParser) closeAt(i, itemIdx int, tag Tag) {
-	children := p.collectChildren(itemIdx)
-	p.pushNode(&Node{Tag: tag, Children: children})
+// closeAt wraps the items after opener i in a node of tag, spanning from the
+// opener to end (just past the closing delimiter), and drops openers from
+// index i up.
+func (p *inlineParser) closeAt(i int, tag Tag, end int) {
+	op := p.openers[i]
+	children := p.collectChildren(op.itemIdx)
+	p.pushNode(at(&Node{Tag: tag, Children: children}, op.srcPos, end))
 	p.openers = p.openers[:i]
 }
 
@@ -123,7 +137,7 @@ func (p *inlineParser) parse() []*Node {
 			p.textStart = p.pos
 		case '\n':
 			p.flushText()
-			p.pushNode(&Node{Tag: SoftBreak})
+			p.pushNode(at(&Node{Tag: SoftBreak}, p.pos, p.pos+1))
 			p.pos++
 			p.textStart = p.pos
 		case '*', '_':
@@ -160,7 +174,7 @@ func (p *inlineParser) parse() []*Node {
 				}
 				p.pos = end
 			} else {
-				p.addText("{", -1)
+				p.pushNode(at(lit("{"), p.pos, p.pos+1))
 				p.pos++
 			}
 			p.textStart = p.pos
@@ -168,21 +182,21 @@ func (p *inlineParser) parse() []*Node {
 			p.flushText()
 			if p.pos+1 < len(src) && src[p.pos+1] == '^' {
 				if close, ok := findMatchingBracket(src, p.pos); ok {
-					p.pushNode(&Node{Tag: FootnoteReference, Text: src[p.pos+2 : close]})
+					p.pushNode(at(&Node{Tag: FootnoteReference, Text: src[p.pos+2 : close]}, p.pos, close+1))
 					p.pos = close + 1
 					p.textStart = p.pos
 					continue
 				}
 			}
 			p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
-			p.pushNode(lit("["))
+			p.pushNode(at(lit("["), p.pos, p.pos+1))
 			p.pos++
 			p.textStart = p.pos
 		case '!':
 			if p.pos+1 < len(src) && src[p.pos+1] == '[' {
 				p.flushText()
 				p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
-				p.pushNode(lit("!["))
+				p.pushNode(at(lit("!["), p.pos, p.pos+2))
 				p.pos += 2
 				p.textStart = p.pos
 			} else {
@@ -195,7 +209,7 @@ func (p *inlineParser) parse() []*Node {
 		case '<':
 			p.flushText()
 			if !p.handleAutolink() {
-				p.addText("<", -1)
+				p.pushNode(at(lit("<"), p.pos, p.pos+1))
 				p.pos++
 			}
 			p.textStart = p.pos
@@ -247,7 +261,7 @@ func (p *inlineParser) parse() []*Node {
 					count--
 					dp--
 				}
-				p.emitDashes(count)
+				p.emitDashes(p.pos, count)
 				p.pos = dp
 				p.textStart = p.pos
 			} else {
@@ -256,7 +270,7 @@ func (p *inlineParser) parse() []*Node {
 		case '.':
 			if p.pos+2 < len(src) && src[p.pos+1] == '.' && src[p.pos+2] == '.' {
 				p.flushText()
-				p.pushNode(&Node{Tag: Ellipsis})
+				p.pushNode(at(&Node{Tag: Ellipsis}, p.pos, p.pos+3))
 				p.pos += 3
 				p.textStart = p.pos
 			} else {
@@ -274,7 +288,7 @@ func (p *inlineParser) parse() []*Node {
 func (p *inlineParser) handleBackslash() {
 	src, pos := p.src, p.pos
 	if pos+1 >= len(src) {
-		p.pushNode(lit("\\"))
+		p.pushNode(at(lit("\\"), pos, pos+1))
 		p.pos++
 		return
 	}
@@ -282,7 +296,7 @@ func (p *inlineParser) handleBackslash() {
 	switch {
 	case next == '\n':
 		p.stripTrailingSpacesFromLastStr()
-		p.pushNode(&Node{Tag: HardBreak})
+		p.pushNode(at(&Node{Tag: HardBreak}, pos+1, pos+2))
 		p.pos += 2
 	case next == ' ' || next == '\t':
 		skip := pos + 1
@@ -291,20 +305,20 @@ func (p *inlineParser) handleBackslash() {
 		}
 		if skip < len(src) && src[skip] == '\n' {
 			p.stripTrailingSpacesFromLastStr()
-			p.pushNode(&Node{Tag: HardBreak})
+			p.pushNode(at(&Node{Tag: HardBreak}, pos+1, skip+1))
 			p.pos = skip + 1
 		} else if next == ' ' {
-			p.pushNode(&Node{Tag: NonBreakingSpace})
+			p.pushNode(at(&Node{Tag: NonBreakingSpace}, pos+1, pos+2))
 			p.pos += 2
 		} else {
-			p.pushNode(lit("\\"))
+			p.pushNode(at(lit("\\"), pos, pos+1))
 			p.pos++
 		}
 	case isEscapable(next):
 		p.pushNode(strNode(src[pos+1:pos+2], pos+1))
 		p.pos += 2
 	default:
-		p.pushNode(lit("\\"))
+		p.pushNode(at(lit("\\"), pos, pos+1))
 		p.pos++
 	}
 }
@@ -315,7 +329,7 @@ func (p *inlineParser) handleBackticks() {
 	after := pos + tickLen
 	closePos, ok := findClosingTicks(src, after, tickLen)
 	if !ok {
-		p.pushNode(&Node{Tag: Verbatim, Text: trimVerbatimContent(src[after:])})
+		p.pushNode(at(&Node{Tag: Verbatim, Text: trimVerbatimContent(src[after:])}, pos, len(src)))
 		p.pos = len(src)
 		return
 	}
@@ -326,13 +340,13 @@ func (p *inlineParser) handleBackticks() {
 		if fe := strings.IndexByte(src[afterClose:], '}'); fe >= 0 {
 			fe += afterClose
 			if format := src[afterClose+2 : fe]; format != "" && !strings.Contains(format, " ") {
-				p.pushNode(&Node{Tag: RawInline, Text: content, Lang: format})
+				p.pushNode(at(&Node{Tag: RawInline, Text: content, Lang: format}, pos, fe+1))
 				p.pos = fe + 1
 				return
 			}
 		}
 	}
-	p.pushNode(&Node{Tag: Verbatim, Text: content})
+	p.pushNode(at(&Node{Tag: Verbatim, Text: content}, pos, afterClose))
 }
 
 func (p *inlineParser) handleMath() {
@@ -350,7 +364,7 @@ func (p *inlineParser) handleMath() {
 			if dollars == 2 {
 				tag = DisplayMath
 			}
-			p.pushNode(&Node{Tag: tag, Text: src[contentStart:closePos]})
+			p.pushNode(at(&Node{Tag: tag, Text: src[contentStart:closePos]}, pos, closePos+tickLen))
 			p.pos = closePos + tickLen
 			return
 		}
@@ -408,7 +422,7 @@ func (p *inlineParser) handleBracedClose(char byte) bool {
 	for i := len(p.openers) - 1; i >= 0; i-- {
 		op := p.openers[i]
 		if op.char == char && op.marked && op.itemIdx+1 < len(p.items) {
-			p.closeAt(i, op.itemIdx, bracedTag(char))
+			p.closeAt(i, bracedTag(char), p.pos+2)
 			return true
 		}
 	}
@@ -429,7 +443,7 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 		for i := len(p.openers) - 1; i >= 0; i-- {
 			op := p.openers[i]
 			if op.char == char && op.marked && op.itemIdx+1 < len(p.items) {
-				p.closeAt(i, op.itemIdx, emphTag(char))
+				p.closeAt(i, emphTag(char), pos+2)
 				p.pos = pos + 2
 				return
 			}
@@ -444,7 +458,7 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 			op := p.openers[i]
 			if op.char == char && op.marked == marked {
 				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, op.itemIdx, emphTag(char))
+					p.closeAt(i, emphTag(char), pos+1)
 					p.pos = pos + 1
 					return
 				}
@@ -454,7 +468,7 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 	}
 
 	if marked || canOpenDelim(src, pos) {
-		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: pos, marked: marked})
+		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 		p.pos = pos + 1
 		return
 	}
@@ -471,9 +485,10 @@ func (p *inlineParser) handleCloseBracket() {
 			continue
 		}
 		children := p.collectChildren(op.itemIdx)
-		tag, bracket := Link, "["
+		tag, bracket, start := Link, "[", op.srcPos
 		if op.char == '!' {
-			tag, bracket = Image, "!["
+			// zjot starts an image at its "[", not the "!".
+			tag, bracket, start = Image, "![", op.srcPos+1
 		}
 		p.pos = pos + 1
 
@@ -482,21 +497,22 @@ func (p *inlineParser) handleCloseBracket() {
 			case '(':
 				if cp, ok := findMatchingParen(src, p.pos); ok {
 					dest := processUrl(src[p.pos+1 : cp])
-					p.pushNode(&Node{Tag: tag, Children: children, Destination: &dest})
 					p.pos = cp + 1
+					p.pushNode(at(&Node{Tag: tag, Children: children, Destination: &dest}, start, p.pos))
 					p.openers = p.openers[:i]
 					return
 				}
 			case '[':
 				if cr, ok := findMatchingBracket(src, p.pos); ok {
-					p.pushNode(&Node{Tag: tag, Children: children, Reference: src[p.pos+1 : cr]})
+					p.pushNode(at(&Node{Tag: tag, Children: children, Reference: src[p.pos+1 : cr]}, start, cr+1))
 					p.pos = cr + 1
 					p.openers = p.openers[:i]
 					return
 				}
 			case '{':
 				if ba, end, ok := parseInlineAttrs(src, p.pos); ok {
-					span := &Node{Tag: Span, Children: children}
+					// The span ends at its "]"; the attributes are not part of it.
+					span := at(&Node{Tag: Span, Children: children}, op.srcPos, pos+1)
 					applyBlockAttrs(span, ba)
 					p.pushNode(span)
 					p.pos = end
@@ -507,15 +523,15 @@ func (p *inlineParser) handleCloseBracket() {
 		}
 
 		// Not a link after all: put the bracketed text back as text.
-		p.pushNode(lit(bracket))
+		p.pushNode(at(lit(bracket), op.srcPos, op.srcPos+len(bracket)))
 		for _, c := range children {
 			p.pushNode(c)
 		}
-		p.pushNode(lit("]"))
+		p.pushNode(at(lit("]"), pos, pos+1))
 		p.openers = p.openers[:i]
 		return
 	}
-	p.addText("]", -1)
+	p.pushNode(at(lit("]"), pos, pos+1))
 	p.pos = pos + 1
 }
 
@@ -529,9 +545,9 @@ func (p *inlineParser) handleAutolink() bool {
 	content := rest[:close]
 	switch {
 	case hasScheme(content):
-		p.pushNode(&Node{Tag: URL, Text: content})
+		p.pushNode(at(&Node{Tag: URL, Text: content}, pos, pos+close+2))
 	case strings.Contains(content, "@") && !strings.Contains(content, " "):
-		p.pushNode(&Node{Tag: Email, Text: content})
+		p.pushNode(at(&Node{Tag: Email, Text: content}, pos, pos+close+2))
 	default:
 		return false
 	}
@@ -563,7 +579,7 @@ func (p *inlineParser) handleSuperSubscript(char byte, tag Tag) {
 	for i := len(p.openers) - 1; i >= 0; i-- {
 		op := p.openers[i]
 		if op.char == char && op.itemIdx+1 < len(p.items) {
-			p.closeAt(i, op.itemIdx, tag)
+			p.closeAt(i, tag, pos+1)
 			p.pos = pos + 1
 			return
 		}
@@ -594,17 +610,22 @@ func (p *inlineParser) handleSymbol() bool {
 			return false
 		}
 	}
-	p.pushNode(&Node{Tag: Symb, Text: name})
+	p.pushNode(at(&Node{Tag: Symb, Text: name}, pos, end+1))
 	p.pos = end + 1
 	return true
 }
 
-// emitDashes turns a run of hyphens into em dashes (3) and en dashes (2):
-// all em if divisible by 3, else all en if divisible by 2, else em first.
-func (p *inlineParser) emitDashes(count int) {
+// emitDashes turns a run of count hyphens starting at start into em dashes
+// (3) and en dashes (2): all em if divisible by 3, else all en if divisible
+// by 2, else em first.
+func (p *inlineParser) emitDashes(start, count int) {
+	emit := func(n *Node, width int) {
+		p.pushNode(at(n, start, start+width))
+		start += width
+	}
 	if count <= 1 {
 		if count == 1 {
-			p.addText("-", -1)
+			emit(lit("-"), 1)
 		}
 		return
 	}
@@ -613,19 +634,19 @@ func (p *inlineParser) emitDashes(count int) {
 	for remaining := count; remaining > 0; {
 		switch {
 		case allEm:
-			p.pushNode(&Node{Tag: EmDash})
+			emit(&Node{Tag: EmDash}, 3)
 			remaining -= 3
 		case allEn:
-			p.pushNode(&Node{Tag: EnDash})
+			emit(&Node{Tag: EnDash}, 2)
 			remaining -= 2
 		case remaining >= 3 && (remaining%2 != 0 || remaining > 4):
-			p.pushNode(&Node{Tag: EmDash})
+			emit(&Node{Tag: EmDash}, 3)
 			remaining -= 3
 		case remaining >= 2:
-			p.pushNode(&Node{Tag: EnDash})
+			emit(&Node{Tag: EnDash}, 2)
 			remaining -= 2
 		default:
-			p.addText("-", -1)
+			emit(lit("-"), 1)
 			remaining--
 		}
 	}
@@ -657,7 +678,7 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 			op := p.openers[i]
 			if op.char == char && op.marked {
 				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, op.itemIdx, quoteTag(char))
+					p.closeAt(i, quoteTag(char), pos+2)
 					p.pos = pos + 2
 					return
 				}
@@ -665,9 +686,9 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 			}
 		}
 		if char == '\'' {
-			p.pushNode(lit("\u2019"))
+			p.pushNode(at(lit("\u2019"), pos, pos+2))
 		} else {
-			p.pushNode(lit("\u201d"))
+			p.pushNode(at(lit("\u201d"), pos, pos+2))
 		}
 		p.pos = pos + 2
 		return
@@ -682,7 +703,7 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 			op := p.openers[i]
 			if op.char == char && !op.marked {
 				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, op.itemIdx, quoteTag(char))
+					p.closeAt(i, quoteTag(char), pos+1)
 					p.pos = pos + 1
 					return
 				}
@@ -692,12 +713,12 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 	}
 
 	if canOpen {
-		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: pos, marked: marked})
+		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 	} else if char == '\'' {
 		// Neither opens nor closes: an apostrophe.
-		p.pushNode(lit("\u2019"))
+		p.pushNode(at(lit("\u2019"), pos, pos+1))
 	} else {
-		p.pushNode(lit("\u201c"))
+		p.pushNode(at(lit("\u201c"), pos, pos+1))
 	}
 	p.pos = pos + 1
 }
@@ -711,13 +732,35 @@ func (p *inlineParser) collectChildren(openerIdx int) []*Node {
 		case itemNode:
 			children = append(children, it.node)
 		case itemOpener:
-			children = append(children, lit(openerText(it.opener)))
+			children = append(children, openerLit(it.opener))
 		case itemAttrs:
 			children = applyAttrsToResolved(children, it.attrs)
 		}
 	}
 	p.items = p.items[:openerIdx]
 	return children
+}
+
+// openerStart is where an opener whose delimiter is at pos starts: a braced
+// opener starts at its "{".
+func openerStart(pos int, marked bool) int {
+	if marked {
+		return pos - 1
+	}
+	return pos
+}
+
+// openerLen is the number of source bytes an opener spans.
+func openerLen(op openerInfo) int {
+	if op.marked || op.char == '!' {
+		return 2
+	}
+	return 1
+}
+
+// openerLit is the text node an unmatched opener leaves behind.
+func openerLit(op openerInfo) *Node {
+	return at(lit(openerText(op)), op.srcPos, op.srcPos+openerLen(op))
 }
 
 // openerText is the source text an unmatched opener stands for.
@@ -751,7 +794,7 @@ func (p *inlineParser) resolveItems() []*Node {
 		case itemNode:
 			nodes = append(nodes, it.node)
 		case itemOpener:
-			nodes = append(nodes, lit(openerText(it.opener)))
+			nodes = append(nodes, openerLit(it.opener))
 		case itemAttrs:
 			nodes = applyAttrsToResolved(nodes, it.attrs)
 		}
@@ -814,7 +857,8 @@ func applyAttrsToResolved(nodes []*Node, ba blockAttrs) []*Node {
 			spanChildren = append(spanChildren, tail(last, wordStart))
 		}
 
-		span := &Node{Tag: Span, Children: spanChildren}
+		s := childrenSpan(spanChildren)
+		span := at(&Node{Tag: Span, Children: spanChildren}, s.start, s.end)
 		applyBlockAttrs(span, ba)
 
 		switch {
@@ -1019,4 +1063,24 @@ func mergeRefAttrs(n *Node, ref blockAttrs) {
 		}
 	}
 	n.Attrs = append(merged, n.Attrs...)
+}
+
+// childrenSpan is the extent from the first child's start to the last
+// child's end in the inline source, skipping children without one.
+func childrenSpan(children []*Node) srcSpan {
+	var span srcSpan
+	for _, c := range children {
+		s := c.src
+		if c.Tag == Str && c.off > 0 {
+			s = srcSpan{c.off - 1, c.off - 1 + len(c.Text)}
+		}
+		if s.end == 0 {
+			continue
+		}
+		if span.end == 0 {
+			span.start = s.start
+		}
+		span.end = s.end
+	}
+	return span
 }
