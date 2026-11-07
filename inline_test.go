@@ -18,6 +18,15 @@ func TestInlinePositions(t *testing.T) {
 		{"a] b\n", "str (1:2:1-1:2:1) text=\"]\"\n"},
 		{"word{.c} x\n", "span (1:1:0-1:4:3) class=\"c\"\n"},
 		{"word{.c} x\n", "str (1:1:0-1:4:3) text=\"word\"\n"},
+		// Attributes on literal text keep the literal's extent, on the
+		// word span and on the text inside it.
+		{"]{.c}\n", "span (1:1:0-1:1:0) class=\"c\"\n"},
+		{"]{.c}\n", "str (1:1:0-1:1:0) text=\"]\"\n"},
+		{"*{.c}\n", "str (1:1:0-1:1:0) text=\"*\"\n"},
+		{"'{.c}\n", "str (1:1:0-1:1:0) text=\"’\"\n"},
+		{"![{.c}\n", "span (1:1:0-1:2:1) class=\"c\"\n"},
+		{"![{.c}\n", "str (1:1:0-1:2:1) text=\"![\"\n"},
+		{"a ]{.c}\n", "str (1:3:2-1:3:2) text=\"]\"\n"},
 		// Nesting: containers and the text inside them.
 		{"_a *b*_\n", "emph (1:1:0-1:7:6)\n"},
 		{"_a *b*_\n", "strong (1:4:3-1:6:5)\n"},
@@ -37,7 +46,7 @@ func TestInlinePositions(t *testing.T) {
 // Every inline node under a paragraph has a position.
 func TestEveryInlineNodeHasPosition(t *testing.T) {
 	src := "a _b_ *c* [l](u) ![i](u) [s]{.x} `v` x\\\ny\\ z {=m=} {+i+} {-d-} " +
-		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u\n"
+		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u ]{.c} {\"q <y ![i] { a\\\n"
 	doc := Parse([]byte(src), WithSourcePos())
 	var walk func(n *Node)
 	walk = func(n *Node) {

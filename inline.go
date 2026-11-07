@@ -67,11 +67,19 @@ func at(n *Node, start, end int) *Node {
 	return n
 }
 
-// tail returns a text node for n.Text[start:], keeping the source offset.
+// tail returns a text node for n.Text[start:], keeping the source offset of
+// a slice or the extent of a literal. A literal whose text is not its source
+// bytes (a smart quote) keeps its whole extent, since its text cannot be
+// mapped byte for byte.
 func tail(n *Node, start int) *Node {
 	t := &Node{Tag: Str, Text: n.Text[start:]}
-	if n.off > 0 {
+	switch {
+	case n.off > 0:
 		t.off = n.off + start
+	case n.src.end > 0 && start > 0 && n.src.end-n.src.start == len(n.Text):
+		t.src = srcSpan{n.src.start + start, n.src.end}
+	default:
+		t.src = n.src
 	}
 	return t
 }
