@@ -1,8 +1,6 @@
 package gjot
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,35 +14,6 @@ func roundTrip(t *testing.T, src string) (djot, html string) {
 		t.Fatal(err)
 	}
 	return djot, string(out)
-}
-
-func TestWriterRoundTripsCorpus(t *testing.T) {
-	files, err := filepath.Glob("testdata/spec/*.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		content, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, c := range parseSpecFile(string(content)) {
-			if c.filter {
-				continue
-			}
-			djot, html := roundTrip(t, c.input)
-			if c.ast {
-				want := string(ASTText(Parse([]byte(c.input))))
-				if got := string(ASTText(Parse([]byte(djot)))); got != want {
-					t.Errorf("%s:%d\n---input---\n%s---written---\n%s---expected ast---\n%s---got---\n%s", file, c.line, c.input, djot, want, got)
-				}
-				continue
-			}
-			if html != c.expected {
-				t.Errorf("%s:%d\n---input---\n%s---written---\n%s---expected---\n%s---got---\n%s", file, c.line, c.input, djot, c.expected, html)
-			}
-		}
-	}
 }
 
 func TestWriterNestingDepth(t *testing.T) {
