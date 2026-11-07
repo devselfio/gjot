@@ -13,7 +13,9 @@ type lineSegment struct {
 
 // resolve maps an offset in the joined text to its source position. The
 // newline that joins a line to the next is reported as the next line,
-// column 0, at the newline's own offset, as zjot reports it.
+// column 0, at the newline's own offset, as zjot reports it. This relies on
+// parseParagraph joining lines with exactly one "\n" byte: the byte just
+// before a segment's joinedStart is taken to be that newline.
 func (m lineMap) resolve(joinedOffset int) SourcePos {
 	if len(m.segments) == 0 {
 		return SourcePos{Line: 1, Col: 1, Offset: joinedOffset}
