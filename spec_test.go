@@ -81,6 +81,54 @@ func parseSpecFile(content string) []specCase {
 	return cases
 }
 
+// checkCase is the verdict on one non-filter case: its expected output, then
+// the writer round trip (written back to Djot and re-rendered, the result must
+// not change). A nil error means the case passes.
+func checkCase(c specCase) error {
+	input := []byte(c.input)
+	var got []byte
+	if c.ast {
+		var opts []ParseOption
+		if c.sourcepos {
+			opts = append(opts, WithSourcePos())
+		}
+		got = ASTText(Parse(input, opts...))
+	} else {
+		var err error
+		got, err = HTML(Parse(input))
+		if err != nil {
+			return err
+		}
+	}
+	if string(got) != c.expected {
+		return fmt.Errorf("\n---input---\n%s---expected---\n%s---got---\n%s---end---",
+			c.input, c.expected, got)
+	}
+
+	djot := Djot(Parse(input))
+	if c.ast {
+		want := ASTText(Parse(input))
+		if got := ASTText(Parse(djot)); string(got) != string(want) {
+			return fmt.Errorf("round trip: AST changed\n---input---\n%s---written---\n%s---expected ast---\n%s---got---\n%s---end---",
+				c.input, djot, want, got)
+		}
+		return nil
+	}
+	got, err := HTML(Parse(djot))
+	if err != nil {
+		return err
+	}
+	if string(got) != c.expected {
+		return fmt.Errorf("round trip: HTML changed\n---input---\n%s---written---\n%s---expected---\n%s---got---\n%s---end---",
+			c.input, djot, c.expected, got)
+	}
+	return nil
+}
+
+// TestSpec runs every case of testdata/spec/*.test through checkCase and
+// judges it against the known-failures list: a listed case must fail, an
+// unlisted one must pass, and every entry must name a case. It logs the pass
+// count out of the total.
 func TestSpec(t *testing.T) {
 	files, err := filepath.Glob("testdata/spec/*.test")
 	if err != nil {
@@ -89,37 +137,54 @@ func TestSpec(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no testdata/spec/*.test files found")
 	}
+	known := loadKnownFailures(t)
+	// corpus holds every non-filter case of every file. It is filled here,
+	// outside the subtests, so a -run filter does not shrink it and make
+	// real entries look stale.
+	corpus := make(map[caseID]bool)
+	// total and the other counters are only bumped inside subtests that
+	// run, so under -run the count line describes the cases selected.
+	var total, passing, knownFailing, skipped int
 	for _, file := range files {
-		name := strings.TrimSuffix(filepath.Base(file), ".test")
+		base := filepath.Base(file)
 		content, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Run(name, func(t *testing.T) {
-			for _, c := range parseSpecFile(string(content)) {
+		cases := parseSpecFile(string(content))
+		for _, c := range cases {
+			if !c.filter {
+				corpus[caseID{base, c.line}] = true
+			}
+		}
+		t.Run(strings.TrimSuffix(base, ".test"), func(t *testing.T) {
+			for _, c := range cases {
 				t.Run(fmt.Sprintf("L%d", c.line), func(t *testing.T) {
+					total++
 					if c.filter {
+						skipped++
 						t.Skip("lua filter")
 					}
-					var got []byte
-					if c.ast {
-						var opts []ParseOption
-						if c.sourcepos {
-							opts = append(opts, WithSourcePos())
-						}
-						got = ASTText(Parse([]byte(c.input), opts...))
-					} else {
-						got, err = HTML(Parse([]byte(c.input)))
-						if err != nil {
-							t.Fatal(err)
-						}
-					}
-					if string(got) != c.expected {
-						t.Errorf("%s:%d\n---input---\n%s---expected---\n%s---got---\n%s---end---",
-							file, c.line, c.input, c.expected, got)
+					id := caseID{base, c.line}
+					err := checkCase(c)
+					switch classify(known[id], err) {
+					case passed:
+						passing++
+					case knownFailure:
+						knownFailing++
+						t.Skipf("known failure (%s in %s): %v", id, knownFailuresPath, err)
+					case unexpectedPass:
+						t.Errorf("%s passes; delete the entry %q from %s", id, id, knownFailuresPath)
+					case unexpectedFailure:
+						t.Errorf("%s fails and is not listed; add the entry %q to %s\n%v", id, id, knownFailuresPath, err)
 					}
 				})
 			}
 		})
 	}
+	for _, id := range staleEntries(known, corpus) {
+		t.Errorf("%s names no case; delete it from %s", id, knownFailuresPath)
+	}
+	t.Logf("corpus: %d of %d cases pass, %d known failing, %d skipped (lua filter)",
+		passing, total, knownFailing, skipped)
 }
