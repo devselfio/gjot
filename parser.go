@@ -952,11 +952,8 @@ func (p *stackParser) leafText() string {
 
 // leafNode is a paragraph, heading or caption over the open leaf.
 func (p *stackParser) leafNode(c *container, tag Tag, level, attrsFrom int, s stand) *Node {
-	children, src := p.leafInlines(attrsFrom)
+	children, _ := p.leafInlines(attrsFrom)
 	n := &Node{Tag: tag, Level: level, Children: children}
-	if tag == Heading {
-		n.idText = headingIDText(src, children)
-	}
 	if p.trackPos {
 		n.Pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
 	}

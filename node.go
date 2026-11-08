@@ -128,9 +128,9 @@ type Node struct {
 	// off is the offset of Text in the inline source it was sliced from,
 	// plus one; 0 means Text is not a slice of it. Parse-time only.
 	off int
-	// idText is the raw source a heading's auto id and implicit reference
-	// derive from. Parse-time only.
-	idText string
+	// source is the source text a literal text node stands for when it
+	// differs from Text (a smart quote's ' or "). Parse-time only.
+	source string
 	// src is the node's extent in the inline source. Parse-time only.
 	src srcSpan
 }

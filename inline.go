@@ -77,6 +77,13 @@ func lit(text string) *Node {
 	return &Node{Tag: Str, Text: text}
 }
 
+// quoteLit is the text node a smart quote that pairs with nothing leaves:
+// the glyph it renders as, and the quote it was written as, which is what a
+// heading id or reference label reads (djot.js smart_punctuation text).
+func quoteLit(glyph, source string) *Node {
+	return &Node{Tag: Str, Text: glyph, source: source}
+}
+
 // at records n's extent [start, end) in the inline source and returns n.
 func at(n *Node, start, end int) *Node {
 	n.src = srcSpan{start, end}
@@ -520,7 +527,14 @@ func (p *inlineParser) handleCloseBracket() {
 				}
 			case '[':
 				if cr, ok := findMatchingBracket(src, p.pos); ok {
-					p.pushNode(at(&Node{Tag: tag, Children: children, Reference: src[p.pos+1 : cr]}, start, cr+1))
+					// The label is stored normalized, as djot.js's AST
+					// prints it; a label of blanks only keeps its blanks,
+					// since "" would read as the text-as-label form [a][].
+					ref := src[p.pos+1 : cr]
+					if norm := normalizeLabel(ref); norm != "" {
+						ref = norm
+					}
+					p.pushNode(at(&Node{Tag: tag, Children: children, Reference: ref}, start, cr+1))
 					p.pos = cr + 1
 					p.openers = p.openers[:i]
 					return
@@ -702,9 +716,9 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 			}
 		}
 		if char == '\'' {
-			p.pushNode(at(lit("\u2019"), pos, pos+2))
+			p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+2))
 		} else {
-			p.pushNode(at(lit("\u201d"), pos, pos+2))
+			p.pushNode(at(quoteLit("\u201d", "\""), pos, pos+2))
 		}
 		p.pos = pos + 2
 		return
@@ -732,9 +746,9 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 	} else if char == '\'' {
 		// Neither opens nor closes: an apostrophe.
-		p.pushNode(at(lit("\u2019"), pos, pos+1))
+		p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+1))
 	} else {
-		p.pushNode(at(lit("\u201c"), pos, pos+1))
+		p.pushNode(at(quoteLit("\u201c", "\""), pos, pos+1))
 	}
 	p.pos = pos + 1
 }
@@ -776,31 +790,33 @@ func openerLen(op openerInfo) int {
 
 // openerLit is the text node an unmatched opener leaves behind.
 func openerLit(op openerInfo) *Node {
-	return at(lit(openerText(op)), op.srcPos, op.srcPos+openerLen(op))
+	text, source := openerText(op)
+	return at(quoteLit(text, source), op.srcPos, op.srcPos+openerLen(op))
 }
 
-// openerText is the source text an unmatched opener stands for.
-func openerText(op openerInfo) string {
+// openerText is the text an unmatched opener stands for and, for a smart
+// quote, the quote it was written as (else "").
+func openerText(op openerInfo) (text, source string) {
 	if op.marked {
 		switch op.char {
 		case '-', '+', '=', '*', '_', '~', '^':
-			return "{" + string(rune(op.char))
+			return "{" + string(rune(op.char)), ""
 		case '\'':
-			return "\u2018"
+			return "\u2018", "'"
 		case '"':
-			return "\u201c"
+			return "\u201c", "\""
 		}
-		return string(rune(op.char))
+		return string(rune(op.char)), ""
 	}
 	switch op.char {
 	case '!':
-		return "!["
+		return "![", ""
 	case '"':
-		return "\u201c"
+		return "\u201c", "\""
 	case '\'':
-		return "\u2019"
+		return "\u2019", "'"
 	}
-	return string(rune(op.char))
+	return string(rune(op.char)), ""
 }
 
 func (p *inlineParser) resolveItems() []*Node {
@@ -1017,16 +1033,33 @@ func processUrl(raw string) string {
 	return string(buf)
 }
 
-// normalizeLabel collapses whitespace runs in a reference label to one space.
-func normalizeLabel(raw string) string {
-	if !strings.ContainsAny(raw, "\n\r\t") {
-		return raw
+// isJSSpace is JavaScript's \s: the ASCII blanks, U+00A0, U+1680,
+// U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. Not
+// unicode.IsSpace, which adds U+0085 and lacks U+FEFF.
+func isJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', 0x00a0, 0x1680,
+		0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff:
+		return true
 	}
+	return r >= 0x2000 && r <= 0x200a
+}
+
+// trimJS is JavaScript's String.prototype.trim.
+func trimJS(s string) string {
+	return strings.TrimFunc(s, isJSSpace)
+}
+
+// normalizeLabel is djot.js's normalizeLabel: the label trimmed as
+// JavaScript trims, then every run of ' ', '\t', '\r' and '\n' one space.
+func normalizeLabel(raw string) string {
+	raw = trimJS(raw)
 	buf := make([]byte, 0, len(raw))
 	inWS := false
 	for i := 0; i < len(raw); i++ {
-		if isInlineSpace(raw[i]) {
-			if !inWS && len(buf) > 0 {
+		switch raw[i] {
+		case ' ', '\t', '\r', '\n':
+			if !inWS {
 				buf = append(buf, ' ')
 				inWS = true
 			}
@@ -1035,28 +1068,48 @@ func normalizeLabel(raw string) string {
 		buf = append(buf, raw[i])
 		inWS = false
 	}
-	return strings.TrimSuffix(string(buf), " ")
+	return string(buf)
 }
 
-func getPlainText(n *Node) string {
-	if n.Text != "" {
-		return n.Text
-	}
+// stringContent is djot.js's getStringContent over nodes: the text a heading
+// id, a reference label and image alt text read. A smart quote, a dash and
+// an ellipsis read as their source; breaks as a newline; a non-breaking
+// space and a symbol as nothing. A footnote reference's label is read only
+// when footnoteLabels is set: zjot leaves it out of a heading's text
+// (zjot.test difference 2).
+func stringContent(nodes []*Node, footnoteLabels bool) string {
 	var b strings.Builder
-	for _, c := range n.Children {
-		switch c.Tag {
-		case Str:
-			b.WriteString(c.Text)
-		case SoftBreak:
-			b.WriteByte(' ')
-		default:
-			if len(c.Children) > 0 {
-				b.WriteString(getPlainText(c))
-			} else {
-				b.WriteString(c.Text)
+	var walk func([]*Node)
+	walk = func(nodes []*Node) {
+		for _, n := range nodes {
+			switch n.Tag {
+			case Str:
+				if n.source != "" {
+					b.WriteString(n.source)
+				} else {
+					b.WriteString(n.Text)
+				}
+			case Verbatim, InlineMath, DisplayMath, RawInline, URL, Email:
+				b.WriteString(n.Text)
+			case SoftBreak, HardBreak:
+				b.WriteByte('\n')
+			case Ellipsis:
+				b.WriteString("...")
+			case EmDash:
+				b.WriteString("---")
+			case EnDash:
+				b.WriteString("--")
+			case FootnoteReference:
+				if footnoteLabels {
+					b.WriteString(n.Text)
+				}
+			case NonBreakingSpace, Symb:
+			default:
+				walk(n.Children)
 			}
 		}
 	}
+	walk(nodes)
 	return b.String()
 }
 

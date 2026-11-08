@@ -379,3 +379,51 @@ func TestBlockEnds(t *testing.T) {
 		})
 	}
 }
+
+// sectionIDs is the ids of the sections in html, in order.
+func sectionIDs(html string) []string {
+	var ids []string
+	for rest := html; ; {
+		i := strings.Index(rest, "<section id=\"")
+		if i < 0 {
+			return ids
+		}
+		rest = rest[i+len("<section id=\""):]
+		j := strings.IndexByte(rest, '"')
+		ids = append(ids, rest[:j])
+		rest = rest[j:]
+	}
+}
+
+func TestHeadingIDFromText(t *testing.T) {
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{"# [x](u)\n", []string{"x"}},
+		{"# `code` and $`m` [l](u)\n", []string{"code-and-m-l"}},
+		{"# a\\\nb\n", []string{"a-b"}},
+		{"# Don't panic\n", []string{"Don't-panic"}},
+		{"# a--b c---d\n", []string{"a--b-c---d"}},
+		{"# a...b\n", []string{"a-b"}},
+		{"# -a-\n", []string{"-a-"}},
+		{"# .a\n", []string{"a"}},
+		{"# a\\_b\n", []string{"a_b"}},
+		{"# é ü\n", []string{"é-ü"}},
+		{"# 　c d \n", []string{"c-d"}},
+		{"# a\\ b\n", []string{"ab"}},
+		{"# :sym: b\n", []string{"b"}},
+		{"# Intro[^n]\n\n[^n]: note\n", []string{"Intro"}},
+		{"# [Foo]{#Foo}\n\n# Foo\n", []string{"Foo-1", "Foo-2"}},
+		{"#\n\n#\n\n# a\n\n# a\n\n# a\n", []string{"s-1", "s-2", "a", "a-1", "a-2"}},
+	}
+	for _, tt := range tests {
+		html := htmlOf(t, tt.src)
+		if got := sectionIDs(html); fmt.Sprint(got) != fmt.Sprint(tt.want) {
+			t.Errorf("%q: section ids %q, want %q\n%s", tt.src, got, tt.want, html)
+		}
+	}
+	if html := htmlOf(t, "#\n\n[][]\n"); !strings.Contains(html, "<a></a>") {
+		t.Errorf("[][] after an empty heading resolved:\n%s", html)
+	}
+}

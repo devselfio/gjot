@@ -381,16 +381,7 @@ func (r *renderer) wrap(tag string, n *Node) {
 }
 
 func (r *renderer) altText(children []*Node) {
-	for _, c := range children {
-		switch c.Tag {
-		case Str:
-			r.attrEsc(c.Text)
-		case SoftBreak:
-			r.w(" ")
-		default:
-			r.altText(c.Children)
-		}
-	}
+	r.attrEsc(stringContent(children, true))
 }
 
 func (r *renderer) listItems(list *Node) {

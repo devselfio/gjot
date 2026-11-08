@@ -104,3 +104,35 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 		t.Errorf("skipped line: resolve(1) = %+v, want %+v", got, want)
 	}
 }
+
+func TestStringContent(t *testing.T) {
+	// The inline tree before resolution, which replaces a footnote
+	// reference's label with its number.
+	nodes, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0)
+	for _, tt := range []struct {
+		labels bool
+		want   string
+	}{
+		// A paired quote is a DoubleQuoted container, which has no text of
+		// its own (djot.js double_quoted): only its children are read.
+		{false, "Don't x a...b c--d e"},
+		{true, "Don't x a...b c--d en"},
+	} {
+		if got := stringContent(nodes, tt.labels); got != tt.want {
+			t.Errorf("stringContent(..., %v) = %q, want %q", tt.labels, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeLabel(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{" a\tb ", "a b"},
+		{"a  b", "a b"},
+		{" c ", "c"},
+		{"a\nb", "a b"},
+	} {
+		if got := normalizeLabel(tt.in); got != tt.want {
+			t.Errorf("normalizeLabel(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

@@ -1,6 +1,9 @@
 package gjot
 
-import "strconv"
+import (
+	"strconv"
+	"unicode/utf8"
+)
 
 // document.go is what block syntax defines for the whole document and what
 // the tree needs from all of it, in the shape of zjot v2.0.0's document.zig:
@@ -58,34 +61,37 @@ func (t *ids) registerTree(nodes []*Node) {
 	}
 }
 
-// isIDSeparator is djot.js's id separator set, `[]~!@#$%^&*(){}`,.<>\|=+/?`
-// and whitespace.
-func isIDSeparator(c byte) bool {
-	switch c {
+// isIDSeparator is djot.js's id separator set, `[]~!@#$%^&*(){}`,.<>\|=+/?`,
+// and JavaScript's \s.
+func isIDSeparator(r rune) bool {
+	switch r {
 	case '[', ']', '~', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '{', '}',
-		'`', ',', '.', '<', '>', '\\', '|', '=', '+', '/', '?', ' ', '\t', '\n', '\r':
+		'`', ',', '.', '<', '>', '\\', '|', '=', '+', '/', '?':
 		return true
 	}
-	return false
+	return isJSSpace(r)
 }
 
 // generate is djot.js's getUniqueIdentifier, as zjot's Ids.generate: a run
-// of separators becomes one '-', none at either end, every other byte kept;
-// an empty text gives s-1, s-2, ...; a taken id gets the next free suffix.
+// of separators becomes one '-', none at either end, every other rune kept
+// (an invalid byte as the byte it was); an empty text gives s-1, s-2, ...;
+// a taken id gets the next free suffix.
 func (t *ids) generate(text string) string {
 	var buf []byte
 	separated := false
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if isIDSeparator(c) {
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if isIDSeparator(r) {
 			separated = true
+			i += size
 			continue
 		}
 		if separated && len(buf) > 0 {
 			buf = append(buf, '-')
 		}
 		separated = false
-		buf = append(buf, c)
+		buf = append(buf, text[i:i+size]...)
+		i += size
 	}
 	base := string(buf)
 	empty := base == ""
@@ -112,16 +118,18 @@ func (t *ids) generate(text string) string {
 
 // heading gives a heading that has just closed its id: explicit when one
 // was written for it (already registered as it opened), else generated from
-// its text. The first heading with a given text claims it as an implicit
-// reference.
+// its rendered text (stringContent, without footnote labels). The first
+// heading with a given text claims it as an implicit reference; a heading
+// whose text normalizes to nothing claims none.
 func (t *ids) heading(n *Node, explicit string) {
+	text := stringContent(n.Children, false)
 	if explicit != "" {
 		n.ID, n.AutoID = explicit, false
 	} else {
-		n.ID, n.AutoID = t.generate(n.idText), true
+		n.ID, n.AutoID = t.generate(text), true
 	}
-	label := normalizeLabel(n.idText)
-	if _, ok := t.autoRefs[label]; !ok {
+	label := normalizeLabel(text)
+	if _, ok := t.autoRefs[label]; label != "" && !ok {
 		t.autoRefs[label] = "#" + n.ID
 	}
 }
@@ -227,10 +235,14 @@ func (d *document) resolve(nodes []*Node) {
 		if (n.Tag == Link || n.Tag == Image) && n.Destination == nil {
 			raw := n.Reference
 			if raw == "" {
-				raw = getPlainText(n)
+				// Children are resolved after n, so a footnote reference in
+				// the text still holds its label here.
+				raw = stringContent(n.Children, true)
 			}
 			label := normalizeLabel(raw)
-			if def, ok := d.defs.refDefs[label]; ok {
+			if label == "" {
+				// An empty label resolves nothing (djot.js).
+			} else if def, ok := d.defs.refDefs[label]; ok {
 				url := def.url
 				n.Destination = &url
 				if def.attrs != nil {
@@ -287,22 +299,4 @@ func (d *document) footnoteSection() *Node {
 		items = append(items, &Node{Tag: ListItem, ID: "fn" + num, Children: content})
 	}
 	return &Node{Tag: Footnote, Children: items, Attrs: []Attr{{"role", "doc-endnotes"}}}
-}
-
-// headingIDText is the raw source from the first to the last top-level text
-// node of a heading: what its auto id and implicit reference derive from.
-func headingIDText(src string, inlines []*Node) string {
-	first, end := -1, 0
-	for _, c := range inlines {
-		if c.Tag == Str && c.Text != "" && c.off > 0 {
-			if first < 0 {
-				first = c.off - 1
-			}
-			end = c.off - 1 + len(c.Text)
-		}
-	}
-	if first < 0 {
-		return ""
-	}
-	return src[first:end]
 }
