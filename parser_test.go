@@ -416,6 +416,9 @@ func TestHeadingIDFromText(t *testing.T) {
 		{"# Intro[^n]\n\n[^n]: note\n", []string{"Intro"}},
 		{"# [Foo]{#Foo}\n\n# Foo\n", []string{"Foo-1", "Foo-2"}},
 		{"#\n\n#\n\n# a\n\n# a\n\n# a\n", []string{"s-1", "s-2", "a", "a-1", "a-2"}},
+		// A quote carrying attributes keeps the source it was written as.
+		{"# '{.c}\n", []string{"'"}},
+		{"# \"{.c}\n", []string{"&quot;"}},
 	}
 	for _, tt := range tests {
 		html := htmlOf(t, tt.src)
@@ -425,5 +428,10 @@ func TestHeadingIDFromText(t *testing.T) {
 	}
 	if html := htmlOf(t, "#\n\n[][]\n"); !strings.Contains(html, "<a></a>") {
 		t.Errorf("[][] after an empty heading resolved:\n%s", html)
+	}
+	for _, src := range []string{"# '{.c}\n\n['][]\n", "# \"{.c}\n\n[\"][]\n"} {
+		if html := htmlOf(t, src); !strings.Contains(html, `href="#`) {
+			t.Errorf("%q: the heading's implicit reference did not resolve:\n%s", src, html)
+		}
 	}
 }

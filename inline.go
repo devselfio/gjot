@@ -96,6 +96,9 @@ func at(n *Node, start, end int) *Node {
 // mapped byte for byte.
 func tail(n *Node, start int) *Node {
 	t := &Node{Tag: Str, Text: n.Text[start:]}
+	if start == 0 {
+		t.source = n.source // the whole literal: a smart quote keeps its quote
+	}
 	switch {
 	case n.off > 0:
 		t.off = n.off + start
@@ -529,7 +532,8 @@ func (p *inlineParser) handleCloseBracket() {
 				if cr, ok := findMatchingBracket(src, p.pos); ok {
 					// The label is stored normalized, as djot.js's AST
 					// prints it; a label of blanks only keeps its blanks,
-					// since "" would read as the text-as-label form [a][].
+					// since "" would read as the text-as-label form [a][]
+					// (zjot.test L9266: [a][ ] resolves nothing).
 					ref := src[p.pos+1 : cr]
 					if norm := normalizeLabel(ref); norm != "" {
 						ref = norm
