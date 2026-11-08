@@ -7,7 +7,6 @@ grid.test L622
 grid.test L653
 grid.test L686
 grid.test L721
-grid.test L770
 grid.test L1166
 grid.test L1214
 grid.test L1226
