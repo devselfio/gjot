@@ -3,6 +3,8 @@ package gjot
 import (
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Djot writes doc back as Djot source. The result re-parses to the same
@@ -415,6 +417,10 @@ type inlineWriter struct {
 	lineStart bool
 	open      map[byte]int // plain-form delimiters currently open
 	prevDash  bool         // the previous node was a dash
+	// apostrophe is set once a ’ has been written as ' in this writer's
+	// output, its inner writers' included; an enclosing SingleQuoted is then
+	// braced, so that ' cannot close it.
+	apostrophe bool
 }
 
 func (d *djotWriter) inlines(nodes []*Node) string {
@@ -444,21 +450,29 @@ func (w *inlineWriter) prev() byte {
 func isText(n *Node) bool { return n.Tag == Str || n.Tag == Escape }
 
 // nodes writes a sequence, coalescing adjacent text nodes so escaping sees
-// the whole run (an escaped "." may have split "1." into two nodes).
+// the whole run (an escaped "." may have split "1." into two nodes). The run
+// keeps where each ’ parsed from a ' stands, since the merged text cannot.
 func (w *inlineWriter) nodes(nodes []*Node) {
 	for i := 0; i < len(nodes); {
 		n := nodes[i]
 		j := i + 1
+		var next *Node
 		if isText(n) {
 			var text strings.Builder
-			text.WriteString(n.Text)
-			for j < len(nodes) && isText(nodes[j]) {
+			var apos []int
+			for j = i; j < len(nodes) && isText(nodes[j]); j++ {
+				if t := nodes[j]; t.Text == apostrophe && t.source == "'" {
+					apos = append(apos, text.Len())
+				}
 				text.WriteString(nodes[j].Text)
-				j++
 			}
-			n = &Node{Tag: Str, Text: text.String()}
+			if j < len(nodes) {
+				next = nodes[j]
+			}
+			w.text(text.String(), apos, next)
+			i = j
+			continue
 		}
-		var next *Node
 		if j < len(nodes) {
 			next = nodes[j]
 		}
@@ -479,7 +493,11 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 	inner.open[char]++
 	inner.nodes(n.Children)
 	content := inner.b.String()
-	braced := braceOnly || content == "" ||
+	w.apostrophe = w.apostrophe || inner.apostrophe
+	// A ' written for an apostrophe would close a plain ' opener; the parser
+	// matches a plain closer only against plain openers, so a braced quote
+	// keeps it an apostrophe.
+	braced := braceOnly || content == "" || char == '\'' && inner.apostrophe ||
 		isInlineSpace(content[0]) || isInlineSpace(content[len(content)-1]) ||
 		(w.open[char] > 0 && (nestedBraces || !isInlineSpace(w.prev()) && w.prev() != 0))
 	d := string(rune(char))
@@ -491,6 +509,19 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 	w.attrs(n)
 }
 
+// text writes a run of text; apos is as for escapeText.
+func (w *inlineWriter) text(text string, apos []int, next *Node) {
+	if w.lineStart && text != "" && isInlineSpace(text[0]) {
+		w.write("{}") // the parser trims a line's leading whitespace
+	}
+	if w.prevDash && strings.HasPrefix(text, "-") {
+		w.write("{}")
+	}
+	out, wrote := escapeText(text, w.lineStart, next, apos, w.b.String())
+	w.apostrophe = w.apostrophe || wrote
+	w.write(out)
+}
+
 func (w *inlineWriter) attrs(n *Node) {
 	w.write(attrSet(n, nil))
 }
@@ -498,17 +529,7 @@ func (w *inlineWriter) attrs(n *Node) {
 func (w *inlineWriter) node(n *Node, next *Node) {
 	switch n.Tag {
 	case Str, Escape:
-		if w.lineStart && n.Text != "" && isInlineSpace(n.Text[0]) {
-			w.write("{}") // the parser trims a line's leading whitespace
-		}
-		if w.prevDash && strings.HasPrefix(n.Text, "-") {
-			w.write("{}")
-		}
-		text := escapeText(n.Text, w.lineStart, next)
-		if w.open['\''] == 0 {
-			text = apostrophes(text, w.prev())
-		}
-		w.write(text)
+		w.text(n.Text, nil, next) // nodes merges text runs; not reached from there
 	case SoftBreak:
 		w.write("\n")
 	case HardBreak:
@@ -605,10 +626,13 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 }
 
 // bracketed writes link, image and span content with the enclosing plain
-// delimiters forgotten, since brackets reset the opener stack's reach.
+// delimiters forgotten, since brackets reset the opener stack's reach. A
+// smart-quote closer inside still reaches past them, so an apostrophe
+// written inside is reported to the enclosing writer (see delimited).
 func (w *inlineWriter) bracketed(children []*Node) {
 	inner := &inlineWriter{d: w.d, lineStart: w.lineStart, open: map[byte]int{}}
 	inner.nodes(children)
+	w.apostrophe = w.apostrophe || inner.apostrophe
 	w.write(inner.b.String())
 }
 
@@ -653,8 +677,16 @@ func isSymbolChar(c byte) bool {
 // escapeText backslash-escapes the bytes of a text node that could otherwise
 // read as markup in context. An escape splits the text node on re-parse, so
 // characters are escaped only where they could combine into markup.
-func escapeText(text string, lineStart bool, next *Node) string {
+//
+// apos holds the offsets, in ascending order, of each ’ in text that was
+// parsed from a ' (Node.source); before is what was written ahead of text.
+// Such a ’ is written back as ' when the character before it allows (see
+// apostropheAfter), so it reads back with that source: a heading id reads
+// "Don't", not "Don’t". A ’ typed as the glyph is always written as the
+// glyph. The result reports whether a ' was written so.
+func escapeText(text string, lineStart bool, next *Node, apos []int, before string) (string, bool) {
 	var b strings.Builder
+	wrote := false
 	markerDelim := -1
 	if lineStart {
 		if m, ok := parseOrderedMarker(text); ok {
@@ -669,6 +701,19 @@ func escapeText(text string, lineStart bool, next *Node) string {
 	nextDots := next != nil && next.Tag == Ellipsis
 	last := len(text) - 1
 	for i := 0; i < len(text); i++ {
+		if len(apos) > 0 && apos[0] == i {
+			apos = apos[1:]
+			prev, _ := utf8.DecodeLastRuneInString(before)
+			if i > 0 {
+				prev, _ = utf8.DecodeLastRuneInString(text[:i])
+			}
+			if apostropheAfter(prev) {
+				b.WriteByte('\'')
+				wrote = true
+				i += len(apostrophe) - 1
+				continue
+			}
+		}
 		c := text[i]
 		escape := strings.IndexByte(alwaysEscaped, c) >= 0 || i == markerDelim
 		switch c {
@@ -693,40 +738,21 @@ func escapeText(text string, lineStart bool, next *Node) string {
 		}
 		b.WriteByte(c)
 	}
-	return b.String()
+	return b.String(), wrote
 }
 
-// apostrophes writes each ’ that follows a letter or digit in escaped text as
-// the ' it was parsed from, so it reads back with that source (a heading id
-// reads "Don't", not "Don’t"); prev is the byte written before text. Such a
-// ' cannot open (the byte before is alphanumeric) and finds no plain ' to
-// close: text ' is always escaped, and the caller applies this only when no
-// SingleQuoted is being written. escapeText never escapes an alphanumeric
-// byte, so the byte before ’ in its output is the one in the text.
-func apostrophes(text string, prev byte) string {
-	const glyph = "’"
-	if !strings.Contains(text, glyph) {
-		return text
-	}
-	var b strings.Builder
-	for {
-		i := strings.Index(text, glyph)
-		if i < 0 {
-			b.WriteString(text)
-			return b.String()
-		}
-		if i > 0 {
-			prev = text[i-1]
-		}
-		b.WriteString(text[:i])
-		if isAlphanumeric(prev) {
-			b.WriteByte('\'')
-		} else {
-			b.WriteString(glyph)
-		}
-		// The byte before the next ’ is in the rest of text, or is what
-		// was just written, ' or ’, neither alphanumeric.
-		prev = 0
-		text = text[i+len(glyph):]
-	}
+// apostrophe is the glyph an apostrophe renders as.
+const apostrophe = "’"
+
+// apostropheAfter reports whether a ' written after prev, a letter, a digit
+// or _, reads back as an apostrophe. It cannot open: canOpenSingleQuote
+// allows none of them before it. As a plain closer it matches only a plain '
+// opener: text ' is always escaped, so the only plain ' openers are
+// SingleQuoted delimiters, and delimited braces every SingleQuoted that
+// encloses such a ', through brackets too (inlineWriter.apostrophe). In
+// escapeText's output the character before the ' is prev itself (a letter
+// or digit is never escaped; _ is written \_), or the ' or ’ just written,
+// which does not qualify.
+func apostropheAfter(prev rune) bool {
+	return unicode.IsLetter(prev) || unicode.IsDigit(prev) || prev == '_'
 }
