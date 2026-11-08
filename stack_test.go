@@ -8,41 +8,11 @@ import (
 	"testing"
 )
 
-// stackFiles names the corpus files the container stack is claimed on: in
-// each, every case the window parser passes must pass under withStack().
-// Slice 2 of farraway/gridapp#12: the files whose inputs hold no list marker
-// and no table row. Slice 3 adds the files whose inputs hold lists but no
-// table row. Cases in other files are tallied only.
-var stackFiles = map[string]bool{
-	"attributes.test":         true,
-	"block_quote.test":        true,
-	"code_blocks.test":        true,
-	"definition_lists.test":   true,
-	"emphasis.test":           true,
-	"escapes.test":            true,
-	"fenced_divs.test":        true,
-	"footnotes.test":          true,
-	"headings.test":           true,
-	"insert_delete_mark.test": true,
-	"links_and_images.test":   true,
-	"lists.test":              true,
-	"math.test":               true,
-	"para.test":               true,
-	"raw.test":                true,
-	"smart.test":              true,
-	"sourcepos.test":          true,
-	"spans.test":              true,
-	"super_subscript.test":    true,
-	"symb.test":               true,
-	"task_lists.test":         true,
-	"thematic_breaks.test":    true,
-	"verbatim.test":           true,
-}
-
 // TestSpecStack runs every non-filter corpus case through checkCase under
-// the container stack and logs a tally per file and in total. A case in a
-// stackFiles file that the window parser passes (it is not on the
-// known-failures list) must pass under the stack too.
+// the container stack and logs a tally per file and in total. The stack is
+// claimed on the whole corpus (slice 4 of farraway/gridapp#12): a case the
+// window parser passes (it is not on the known-failures list) must pass
+// under the stack too, and the stack's total is at least the window's.
 func TestSpecStack(t *testing.T) {
 	files, err := filepath.Glob("testdata/spec/*.test")
 	if err != nil {
@@ -53,7 +23,7 @@ func TestSpecStack(t *testing.T) {
 	}
 	sort.Strings(files)
 	known := loadKnownFailures(t)
-	var total, passing int
+	var total, passing, windowPassing int
 	for _, file := range files {
 		base := filepath.Base(file)
 		content, err := os.ReadFile(file)
@@ -66,13 +36,16 @@ func TestSpecStack(t *testing.T) {
 				continue
 			}
 			fileTotal++
+			if !known[caseID{base, c.line}] {
+				windowPassing++
+			}
 			err := checkStackCase(c)
 			if err == nil {
 				filePassing++
 				continue
 			}
 			id := caseID{base, c.line}
-			if stackFiles[base] && !known[id] {
+			if !known[id] {
 				t.Errorf("%s passes under the window parser and fails under the stack:%v", id, err)
 			}
 		}
@@ -80,7 +53,10 @@ func TestSpecStack(t *testing.T) {
 		passing += filePassing
 		t.Logf("stack: %s: %d of %d pass", base, filePassing, fileTotal)
 	}
-	t.Logf("stack: total: %d of %d pass", passing, total)
+	t.Logf("stack: total: %d of %d pass (window: %d)", passing, total, windowPassing)
+	if passing < windowPassing {
+		t.Errorf("the stack passes %d cases, fewer than the window parser's %d", passing, windowPassing)
+	}
 }
 
 // checkStackCase is checkCase under the stack, a panic reported as a failure
@@ -157,6 +133,12 @@ func TestStackUnits(t *testing.T) {
 		{"lists-lazy-text-through-nested-divs", "zjot.test L6843",
 			"- ::: a\n  ::: b\n  x\n  :::\n  y\n  :::\nlazy\n",
 			"<ul>\n<li>\n<div class=\"a\">\n<div class=\"b\">\n<p>x</p>\n</div>\n</div>\n<p>y\n:::\nlazy</p>\n</li>\n</ul>\n", "", ""},
+		{"caption-after-blank-lines", "tables.test L35",
+			"| a | b |\n\n^ With a _caption_\nand another line.\n",
+			"<table>\n<caption>With a <em>caption</em>\nand another line.</caption>\n<tr>\n<td>a</td>\n<td>b</td>\n</tr>\n</table>\n", "", ""},
+		{"caption-with-no-table-is-dropped", "zjot.test L7478",
+			"^ alone\n\npara\n",
+			"<p>para</p>\n", "", ""},
 	}
 	for _, c := range html {
 		t.Run(c.name, func(t *testing.T) {
@@ -218,6 +200,20 @@ func TestStackUnits(t *testing.T) {
       block_quote
         para
           str text="q"
+`, false},
+		// A later caption replaces an earlier one (djot.js issue #57); the
+		// only replaced-caption case in the djot.js files.
+		{"caption-replaced", "regression.test L46",
+			"| 1 | 2 |\n\n ^ cap1\n\n ^ cap2\n",
+			`doc
+  table
+    caption
+      str text="cap2"
+    row head=false
+      cell head=false align="default"
+        str text="1"
+      cell head=false align="default"
+        str text="2"
 `, false},
 	}
 	for _, c := range ast {

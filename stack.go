@@ -17,8 +17,7 @@ import (
 // after the pass.
 //
 // Not ported from Parser.zig: block arenas, the held table, done/pending,
-// the id log and its counters, and the nesting limit. Lists, tables and
-// captions are stubs in this slice (slices 3 and 4 fill them).
+// the id log and its counters, and the nesting limit.
 
 // srcLine is one line of the input, without its line end (zjot Lines.zig):
 // where it starts, where its newline is (eol: col 0 of the next line, or the
@@ -255,7 +254,10 @@ type containerData struct {
 	end         *SourcePos
 	divFenceLen int
 	class       string
-	aligns      []CellAlign
+	// table: the alignments the last separator row gave, and the row on
+	// the line before, which a separator row makes a header row.
+	aligns    []CellAlign
+	rowBefore *Node
 }
 
 type container struct {
@@ -474,7 +476,12 @@ func (p *stackParser) continues(c *container, cur *cursor) bool {
 		}
 		return true
 	case kindTable:
-		return false // slice 4
+		// A row continues the table; any other line ends it.
+		if !isTableRow(cur.rest()) {
+			return false
+		}
+		p.tableRow(c, cur)
+		return true
 	case kindReferenceDefinition:
 		// A deeper-indented line holding one word continues the destination.
 		r := cur.rest()
@@ -630,7 +637,16 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		cur.i += level
 		return true
 	}
-	// A caption ('^ ' at a block start): slice 4.
+	// A caption ('^ ' at a block start): what is open above closes where
+	// its text starts; it joins the table before it as it closes.
+	if len(r) > 1 && r[0] == '^' && isSpaceOrTab(r[1]) {
+		cur.i++
+		cur.skipSpace()
+		p.closeFrom(matched, cur.stand())
+		p.push(kindCaption, containerData{}, cur.pos())
+		p.tip().leafEnd = cur.pos()
+		return true
+	}
 	if def, ok := parseDefinitionLabel(r); ok {
 		if def.footnote() {
 			p.closeFrom(matched, s)
@@ -674,7 +690,12 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		}}, cur.pos())
 		return true
 	}
-	// A table row: slice 4.
+	if isTableRow(r) {
+		p.closeFrom(matched, s)
+		p.push(kindTable, containerData{}, cur.pos())
+		p.tableRow(p.tip(), cur)
+		return true
+	}
 	// A block attribute opens only when its first line parses so far or
 	// completes at its '}'; a line that fails is a paragraph.
 	if r[0] == '{' && opensAttrBlock(r) {
@@ -708,8 +729,67 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	return false
 }
 
-// tableRow reads a table row at cur. A stub until slice 4.
-func (p *stackParser) tableRow(c *container, cur *cursor) {}
+// tableRow reads the table row at cur into table c and takes the line. A
+// separator row sets the alignments of the rows after it and makes the row
+// on the line before it, if any, a header row with those alignments; any
+// other row becomes a Row of Cells aligned as the last separator said.
+func (p *stackParser) tableRow(c *container, cur *cursor) {
+	r := cur.rest()
+	p.finishedLine = true
+	defer func() { cur.i = len(cur.line.text) }()
+	if isTableSep(r) {
+		aligns := parseSepAligns(r)
+		c.data.aligns = aligns
+		if row := c.data.rowBefore; row != nil {
+			row.Head = true
+			for i, cell := range row.Children {
+				cell.Head = true
+				cell.Align = alignAt(aligns, i)
+			}
+		}
+		c.data.rowBefore = nil
+		return
+	}
+	row := &Node{Tag: Row}
+	// Each cell's text starts after the pipe before it; the cells are
+	// contiguous, one pipe apart.
+	off := cur.i + 1
+	for i, text := range rowCells(r) {
+		lead := len(text) - len(strings.TrimLeft(text, " \t"))
+		content := trimCellEnd(text[lead:])
+		if content != "" {
+			p.addLeafSlice(content, cur.at(off+lead), cur.line)
+		}
+		children, _ := p.leafInlines(0)
+		cell := &Node{Tag: Cell, Children: children, Align: alignAt(c.data.aligns, i)}
+		row.Children = append(row.Children, p.spanned(cell, cur.at(off-1), cur.at(off+len(text))))
+		off += len(text) + 1
+	}
+	p.spanned(row, cur.pos(), afterContent(cur.line))
+	c.children = append(c.children, row)
+	c.data.rowBefore = row
+}
+
+// alignAt is column i's alignment, the default past the separator's cells.
+func alignAt(aligns []CellAlign, i int) CellAlign {
+	if i < len(aligns) {
+		return aligns[i]
+	}
+	return AlignDefault
+}
+
+// trimCellEnd trims a cell's trailing spaces, but keeps one that a
+// backslash escapes.
+func trimCellEnd(text string) string {
+	t := strings.TrimRight(text, " ")
+	if len(t) < len(text) {
+		bs := len(t) - len(strings.TrimRight(t, "\\"))
+		if bs%2 == 1 {
+			return text[:len(t)+1]
+		}
+	}
+	return t
+}
 
 // push opens a container. One that makes a node registers the id waiting
 // for it now, where djot.js reads it.
@@ -1031,9 +1111,10 @@ func (p *stackParser) close(s stand) {
 		n = p.spanned(p.listNodeOf(c), c.start, s.pos)
 	case kindListItem:
 		n = p.spanned(p.itemNode(c), c.start, s.before)
-	default:
-		// Tables and captions: slice 4.
-		p.dropLeaf()
+	case kindTable:
+		n = p.spanned(&Node{Tag: Table, Children: c.children}, c.start, s.pos)
+	case kindCaption:
+		p.closeCaption(c, s)
 		return
 	}
 	p.closeAs(n, s)
@@ -1062,8 +1143,34 @@ func (p *stackParser) closeAs(n *Node, s stand) {
 	}
 }
 
+// closeCaption closes a caption: with the block attributes waiting before
+// it, it becomes the first child of the table before it, replacing an
+// earlier caption; with no table before it, it is dropped. Its ids, and
+// the waiting attributes' id, were registered either way.
+func (p *stackParser) closeCaption(c *container, s stand) {
+	n := p.leafNode(c, Caption, 0, 0, s)
+	slot := p.attrsSlot()
+	ba := *slot
+	*slot = nil
+	if ba != nil {
+		p.doc.ids.register(ba.id)
+	}
+	table := p.tableBefore()
+	if table == nil {
+		return
+	}
+	if ba != nil {
+		applyBlockAttrs(n, *ba)
+	}
+	rows := table.Children
+	if len(rows) > 0 && rows[0].Tag == Caption {
+		rows = rows[1:]
+	}
+	table.Children = append([]*Node{n}, rows...)
+}
+
 // tableBefore is the last sibling, if a table: the table a caption closing
-// now joins (slice 4).
+// now joins.
 func (p *stackParser) tableBefore() *Node {
 	siblings := p.blocks
 	if len(p.stack) > 0 {
