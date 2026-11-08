@@ -276,10 +276,22 @@ func tableRowCells(line string) ([]string, bool) {
 	for i := 1; i < len(rest); {
 		switch rest[i] {
 		case '\\':
-			i += 2
+			// An escaped backslash or backtick is skipped whole, but a
+			// pipe is left for the case below to see.
+			if i+1 < len(rest) && rest[i+1] == '|' {
+				i++
+			} else {
+				i += 2
+			}
 		case '`':
 			i = skipBacktickSpan(rest, i)
 		case '|':
+			// A pipe right after a backslash is escaped, whatever stands
+			// before the backslash (zjot.test L9459).
+			if rest[i-1] == '\\' {
+				i++
+				continue
+			}
 			cells = append(cells, rest[start:i])
 			i++
 			start = i

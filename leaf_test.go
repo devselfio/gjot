@@ -224,8 +224,8 @@ func TestLeafIsTableRow(t *testing.T) {
 		want bool
 	}{
 		{"| a |", true}, {"|a|b|", true}, {"||", true}, {"  | a |  ", true}, {"| a |\t", true},
-		{"| `|` |", true}, {"| a \\| b |", true},
-		{"| a", false}, {"| a \\|", false}, {"| `a |", false}, {"a | b |", false}, {"|", false}, {"", false},
+		{"| `|` |", true}, {"| a \\| b |", true}, {"| a \\\\| b |", true},
+		{"| a", false}, {"| a \\|", false}, {"| a\\\\|", false}, {`| a\\\|`, false}, {"| `a |", false}, {"a | b |", false}, {"|", false}, {"", false},
 	} {
 		if got := isTableRow(tc.line); got != tc.want {
 			t.Errorf("isTableRow(%q) = %v, want %v", tc.line, got, tc.want)
@@ -269,6 +269,10 @@ func TestLeafRowCells(t *testing.T) {
 		{"| `|` | c |", []string{" `|` ", " c "}},
 		{"| a \\| b | c |", []string{" a \\| b ", " c "}},
 		{"| ``x|y`` |", []string{" ``x|y`` "}},
+		{`| a\\| b |`, []string{` a\\| b `}},
+		{`| a\\\| b | c |`, []string{` a\\\| b `, ` c `}},
+		{"| \\\\`|` |", []string{" \\\\`|` "}},
+		{"| \\` | `b` |", []string{" \\` ", " `b` "}},
 	} {
 		if got := rowCells(tc.line); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("rowCells(%q) = %q, want %q", tc.line, got, tc.want)
