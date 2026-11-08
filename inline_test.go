@@ -68,8 +68,8 @@ func TestEveryInlineNodeHasPosition(t *testing.T) {
 // the newline's own offset.
 func TestLineMapResolveJoiningNewline(t *testing.T) {
 	m := lineMap{segments: []lineSegment{
-		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}},
-		{joinedStart: 4, orig: SourcePos{Line: 2, Col: 3, Offset: 8}},
+		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 5}},
+		{joinedStart: 4, orig: SourcePos{Line: 2, Col: 3, Offset: 8}, eol: SourcePos{Line: 3, Col: 0, Offset: 10}},
 	}}
 	tests := []struct {
 		off  int
@@ -92,5 +92,15 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	want := Range{Start: SourcePos{Line: 1, Col: 4, Offset: 3}, End: SourcePos{Line: 2, Col: 0, Offset: 5}}
 	if r := m.rangeOf(1, 4); r == nil || *r != want {
 		t.Errorf("rangeOf(1, 4) = %+v, want %+v", r, want)
+	}
+
+	// Segments on lines 1 and 3, line 2 skipped (zjot.test L9563, "# a",
+	// "#", "# b"): the joining newline is line 1's own, not line 3's.
+	skipped := lineMap{segments: []lineSegment{
+		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 3}},
+		{joinedStart: 2, orig: SourcePos{Line: 3, Col: 3, Offset: 8}, eol: SourcePos{Line: 4, Col: 0, Offset: 9}},
+	}}
+	if got, want := skipped.resolve(1), (SourcePos{Line: 2, Col: 0, Offset: 3}); got != want {
+		t.Errorf("skipped line: resolve(1) = %+v, want %+v", got, want)
 	}
 }

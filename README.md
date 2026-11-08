@@ -85,8 +85,9 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text. Source positions are kept only
 when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
-the inline nodes inside them; a definition list item's term and definition and
-the footnote section built at the end do not yet.
+the inline nodes inside them. A definition list item's term and definition
+carry none, as zjot's AST prints none; the footnote section built at the end
+does not yet.
 
 Two things the writer cannot express, because the syntax has no form for them:
 an empty verbatim span in the middle of a paragraph (it is written as a trailing

@@ -272,8 +272,8 @@ type container struct {
 	data    containerData
 }
 
-// leafStart is where a leaf line's content starts.
-type leafStart struct{ pos SourcePos }
+// leafStart is where a leaf line's content starts and where its newline is.
+type leafStart struct{ pos, eol SourcePos }
 
 type stackParser struct {
 	lines    []srcLine
@@ -886,7 +886,7 @@ func (p *stackParser) addLeafLine(cur *cursor) {
 
 func (p *stackParser) addLeafSlice(text string, start SourcePos, l srcLine) {
 	p.leafSlices = append(p.leafSlices, text)
-	p.leafStarts = append(p.leafStarts, leafStart{pos: start})
+	p.leafStarts = append(p.leafStarts, leafStart{pos: start, eol: l.eol})
 	p.leafLastEOL = l.eol
 	p.leafLastNewline = l.newline
 }
@@ -903,7 +903,7 @@ func (p *stackParser) leafLineMap() lineMap {
 	var m lineMap
 	joined := 0
 	for i, s := range p.leafSlices {
-		m.segments = append(m.segments, lineSegment{joinedStart: joined, orig: p.leafStarts[i].pos})
+		m.segments = append(m.segments, lineSegment{joinedStart: joined, orig: p.leafStarts[i].pos, eol: p.leafStarts[i].eol})
 		joined += len(s) + 1
 	}
 	return m
