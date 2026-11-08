@@ -222,3 +222,175 @@ func TestStackUnits(t *testing.T) {
 		})
 	}
 }
+
+// positionedBlocks are the block tags that carry Node.Pos under
+// WithSourcePos (issue #16), at any depth.
+var positionedBlocks = []Tag{
+	BlockQuote, Heading, Section, CodeBlock, RawBlock, Div, ThematicBreak,
+	Table, Row, Cell, Caption, DefinitionList, DefinitionListItem,
+	BulletList, OrderedList, TaskList, ListItem, TaskListItem,
+}
+
+// TestEveryBlockNodeHasPosition parses one document holding each
+// positioned block kind at top level, inside a block quote and inside a
+// list item, and fails on any of them without a position. A definition
+// list item's term and definition carry none, as zjot's AST prints none.
+func TestEveryBlockNodeHasPosition(t *testing.T) {
+	const blocks = "# Head\n\n> quote\n\n```\ncode\n```\n\n``` =html\n<b>\n```\n\n" +
+		"::: d\nin div\n:::\n\n***\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n^ cap\n\n" +
+		": term\n\n  def\n\n- bullet\n\n1. ordered\n\n- [ ] task\n"
+	prefix := func(s, p, blank string) string {
+		var b strings.Builder
+		for _, l := range strings.SplitAfter(s, "\n") {
+			switch l {
+			case "":
+			case "\n":
+				b.WriteString(blank + "\n")
+			default:
+				b.WriteString(p + l)
+			}
+		}
+		return b.String()
+	}
+	input := blocks + "\n" + prefix(blocks, "> ", ">") + "\n- item\n\n" + prefix(blocks, "  ", "")
+
+	// where records, per tag, whether it was seen at top level (outside any
+	// block quote or list item), inside a block quote and inside a list item.
+	type seen struct{ top, quote, item bool }
+	where := map[Tag]*seen{}
+	var walk func(n *Node, inQuote, inItem bool)
+	walk = func(n *Node, inQuote, inItem bool) {
+		s := where[n.Tag]
+		if s == nil {
+			s = &seen{}
+			where[n.Tag] = s
+		}
+		s.top = s.top || (!inQuote && !inItem)
+		s.quote = s.quote || inQuote
+		s.item = s.item || inItem
+		switch n.Tag {
+		case Term, Definition:
+			if n.Pos != nil {
+				t.Errorf("%s has a position %+v; zjot prints none", n.Tag, *n.Pos)
+			}
+		default:
+			for _, tag := range positionedBlocks {
+				if n.Tag == tag && n.Pos == nil {
+					t.Errorf("%s (quote=%v item=%v) has no position", n.Tag, inQuote, inItem)
+				}
+			}
+		}
+		for _, c := range n.Children {
+			walk(c, inQuote || n.Tag == BlockQuote, inItem || n.Tag == ListItem)
+		}
+	}
+	// The root is a section printed as doc, without a position.
+	for _, c := range Parse([]byte(input), WithSourcePos()).Children {
+		walk(c, false, false)
+	}
+	for _, tag := range positionedBlocks {
+		s := where[tag]
+		switch {
+		case s == nil:
+			t.Errorf("%s does not occur in the document", tag)
+		case tag == Section:
+			// Sections are built at the document level only.
+		case !s.top || !s.quote || !s.item:
+			t.Errorf("%s occurs top=%v, in a quote=%v, in an item=%v; want all three", tag, s.top, s.quote, s.item)
+		}
+	}
+	for _, tag := range []Tag{Term, Definition} {
+		if where[tag] == nil {
+			t.Errorf("%s does not occur in the document", tag)
+		}
+	}
+
+	var none func(n *Node)
+	none = func(n *Node) {
+		if n.Pos != nil {
+			t.Errorf("without WithSourcePos, %s has a position %+v", n.Tag, *n.Pos)
+		}
+		for _, c := range n.Children {
+			none(c)
+		}
+	}
+	none(Parse([]byte(input)))
+}
+
+// TestBlockEnds pins where blocks end, as exact AST text with positions,
+// so a moved end fails here as well as in the corpus.
+func TestBlockEnds(t *testing.T) {
+	cases := []struct {
+		name, from, input, want string
+	}{
+		{"quote-in-item-ends-on-blank", "issue #16 rule, no corpus case",
+			"- > q\n\n  b\n",
+			`doc
+  bullet_list (1:1:0-4:0:10) tight=false style="-"
+    list_item (1:1:0-4:0:10)
+      block_quote (1:3:2-3:0:6)
+        para (1:5:4-2:0:5)
+          str (1:5:4-1:5:4) text="q"
+      para (3:3:9-4:0:10)
+        str (3:3:9-3:3:9) text="b"
+`},
+		{"caption-ends-at-last-line-newline", "zjot.test L3838",
+			"| a |\n|---|\n| 1 |\n\n^ Cap one\n  two\n\npara\n",
+			`doc
+  table (1:1:0-5:0:18)
+    caption (5:3:21-7:0:34)
+      str (5:3:21-5:9:27) text="Cap one"
+      soft_break (6:0:28-6:0:28)
+      str (6:3:31-6:5:33) text="two"
+    row (1:1:0-2:0:5) head=true
+      cell (1:1:0-1:5:4) head=true align="default"
+        str (1:3:2-1:3:2) text="a"
+    row (3:1:12-4:0:17) head=false
+      cell (3:1:12-3:5:16) head=false align="default"
+        str (3:3:14-3:3:14) text="1"
+  para (8:1:36-9:0:40)
+    str (8:1:36-8:4:39) text="para"
+`},
+		{"definition-list-closed-by-div-fence-ends-past-it", "zjot.test L4274",
+			":::\n: t\n\n  d\n:::\n",
+			`doc
+  div (1:1:0-5:3:15)
+    definition_list (2:1:4-6:0:16)
+      definition_list_item (2:1:4-5:3:15)
+        term
+          str (2:3:6-2:3:6) text="t"
+        definition
+          para (4:3:11-5:0:12)
+            str (4:3:11-4:3:11) text="d"
+`},
+		{"heading-soft-break-across-bare-marker-line", "zjot.test L9563",
+			"# a\n#\n# b\n",
+			`doc
+  section (1:1:0-4:0:9) id="a-b"
+    heading (1:1:0-4:0:9) level=1
+      str (1:3:2-1:3:2) text="a"
+      soft_break (2:0:3-2:0:3)
+      str (3:3:8-3:3:8) text="b"
+`},
+		{"code-block-in-block-quote", "grid.test L310",
+			"> ```\n> code\n> ```\n",
+			`doc
+  block_quote (1:1:0-4:0:18)
+    code_block (1:3:2-3:5:17) text="code\n"
+`},
+		{"thematic-break-in-block-quote", "grid.test L223",
+			"> ***\n",
+			`doc
+  block_quote (1:1:0-2:0:5)
+    thematic_break (1:3:2-2:0:5)
+`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := string(ASTText(Parse([]byte(c.input), WithSourcePos())))
+			if got != c.want {
+				t.Errorf("%s\n---input---\n%s---want---\n%s---got---\n%s", c.from, c.input, c.want, got)
+			}
+		})
+	}
+}
