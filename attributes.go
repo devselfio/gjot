@@ -103,6 +103,8 @@ type attrParser struct {
 	valueBuf   []byte
 	currentKey string
 	haveKey    bool
+	// idWritten is set once an id token was read, empty or not.
+	idWritten bool
 }
 
 func newAttrParser(src string) *attrParser {
@@ -280,6 +282,7 @@ func stepScanningComment(c byte) attrState {
 }
 
 func (p *attrParser) emitID(pos int) {
+	p.idWritten = true
 	if p.begin < 0 {
 		return
 	}
@@ -429,4 +432,53 @@ func parseInlineAttrs(src string, pos int) (blockAttrs, int, bool) {
 		return blockAttrs{}, 0, false
 	}
 	return p.finish(), end + 1, true
+}
+
+// feedLine feeds the next line of a block attribute that may span lines, as
+// djot.js feeds its attribute container's parser line by line: the line and
+// its line end go after what was fed before, and the machine runs over them.
+// It reports attrDone with the position of the closing '}' in line,
+// attrFail with the failing position (len(line) when the line end failed
+// it), or attrContinue.
+func (p *attrParser) feedLine(line string) (attrStatus, int) {
+	start := len(p.src)
+	p.src += line + "\n"
+	status, pos := p.feed(start, len(p.src)-1)
+	if status == attrContinue {
+		return attrContinue, len(line)
+	}
+	return status, pos - start
+}
+
+// writesID reports whether an id was written, "#x" or empty: a later one
+// overrides an id waiting before it, which was registered all the same.
+func (p *attrParser) writesID() bool { return p.idWritten }
+
+// opensAttr reports whether line, a block attribute's first line, leaves the
+// attribute unfinished: '{', then attribute syntax still open at the line's
+// last byte, its line end not fed (zjot attributes.zig opensAttr).
+func opensAttr(line string) bool {
+	trimmed := strings.Trim(line, " \t")
+	if trimmed == "" || trimmed[0] != '{' {
+		return false
+	}
+	status, _ := newAttrParser(trimmed).feed(0, len(trimmed)-1)
+	return status == attrContinue
+}
+
+// opensAttrBlock reports whether a line opens a block attribute container:
+// its first line parses so far, or completes at a '}' with nothing but
+// blanks after it (djot.js; zjot Parser.zig tryOpen).
+func opensAttrBlock(line string) bool {
+	if line == "" || line[0] != '{' {
+		return false
+	}
+	status, pos := newAttrParser("").feedLine(line)
+	switch status {
+	case attrContinue:
+		return true
+	case attrDone:
+		return pos >= len(line) || isBlank(line[pos+1:])
+	}
+	return false
 }
