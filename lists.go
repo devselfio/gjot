@@ -467,36 +467,3 @@ func winGetListStart(markerText string, style winListStyle) int {
 
 func isRomanLower(c byte) bool { return strings.IndexByte("ivxlcdm", c) >= 0 }
 func isRomanUpper(c byte) bool { return strings.IndexByte("IVXLCDM", c) >= 0 }
-
-func romanToNumber(s string) int {
-	total, prev := 0, 0
-	for i := len(s) - 1; i >= 0; i-- {
-		var n int
-		switch s[i] {
-		case 'i', 'I':
-			n = 1
-		case 'v', 'V':
-			n = 5
-		case 'x', 'X':
-			n = 10
-		case 'l', 'L':
-			n = 50
-		case 'c', 'C':
-			n = 100
-		case 'd', 'D':
-			n = 500
-		case 'm', 'M':
-			n = 1000
-		}
-		if n < prev {
-			total = max(total-n, 0)
-		} else {
-			total += n
-		}
-		prev = n
-	}
-	if total == 0 {
-		return 1
-	}
-	return total
-}
