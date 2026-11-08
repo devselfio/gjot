@@ -195,16 +195,18 @@ func TestLeafParseDefinitionLabel(t *testing.T) {
 		want definitionLabel
 		ok   bool
 	}{
-		{"[foo]: http://x", definitionLabel{label: "foo", rest: "http://x", restCol: 7}, true},
-		{"[foo]:", definitionLabel{label: "foo", restCol: 6}, true},
-		{"[foo]:\t/u  ", definitionLabel{label: "foo", rest: "/u  ", restCol: 7}, true},
-		{"[a b]: /u", definitionLabel{label: "a b", rest: "/u", restCol: 7}, true},
-		{"[]: /u", definitionLabel{label: "", rest: "/u", restCol: 4}, true},
-		{"[^]: /u", definitionLabel{label: "^", rest: "/u", restCol: 5}, true},
-		{"[^note]: The text", definitionLabel{label: "note", rest: "The text", restCol: 9, isFootnote: true}, true},
-		{"[^note]:", definitionLabel{label: "note", restCol: 8, isFootnote: true}, true},
-		{"[^note]:\tx", definitionLabel{label: "note", rest: "x", restCol: 9, isFootnote: true}, true},
-		{"[foo]:x", definitionLabel{}, false},
+		{"[foo]: http://x", definitionLabel{label: "foo", rest: "http://x", restCol: 7, spaced: true}, true},
+		{"[foo]:", definitionLabel{label: "foo", restCol: 6, spaced: true}, true},
+		{"[foo]:\t/u  ", definitionLabel{label: "foo", rest: "/u  ", restCol: 7, spaced: true}, true},
+		{"[a b]: /u", definitionLabel{label: "a b", rest: "/u", restCol: 7, spaced: true}, true},
+		{"[]: /u", definitionLabel{label: "", rest: "/u", restCol: 4, spaced: true}, true},
+		{"[^]: /u", definitionLabel{label: "^", rest: "/u", restCol: 5, spaced: true}, true},
+		{"[^note]: The text", definitionLabel{label: "note", rest: "The text", restCol: 9, isFootnote: true, spaced: true}, true},
+		{"[^note]:", definitionLabel{label: "note", restCol: 8, isFootnote: true, spaced: true}, true},
+		{"[^note]:\tx", definitionLabel{label: "note", rest: "x", restCol: 9, isFootnote: true, spaced: true}, true},
+		{"[foo]:x", definitionLabel{label: "foo", rest: "x", restCol: 6}, true},
+		{"[^n]:x", definitionLabel{label: "n", rest: "x", restCol: 5, isFootnote: true}, true},
+		{"[^]:x", definitionLabel{label: "^", rest: "x", restCol: 4}, true},
 		{"[foo] : x", definitionLabel{}, false},
 		{"[foo", definitionLabel{}, false},
 		{"foo]: x", definitionLabel{}, false},
@@ -397,6 +399,31 @@ func TestLeafRomanToNumber(t *testing.T) {
 	for s, want := range map[string]int{"i": 1, "iv": 4, "ix": 9, "MCMXC": 1990, "": 1} {
 		if got := romanToNumber(s); got != want {
 			t.Errorf("romanToNumber(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
+// A definition opened with "[^label]:" is a footnote only when a space, a
+// tab or the line's end follows the colon; otherwise it is a reference
+// labelled "^label" (zjot.test L7462).
+func TestLeafDefinitionLabelKind(t *testing.T) {
+	for _, tc := range []struct {
+		line     string
+		footnote bool
+		label    string
+	}{
+		{"[^n]: x", true, "n"}, {"[^n]:", true, "n"}, {"[^n]:x", false, "^n"},
+		{"[foo]:x", false, "foo"}, {"[foo]: x", false, "foo"}, {"[^]: x", false, "^"},
+	} {
+		d, ok := parseDefinitionLabel(tc.line)
+		if !ok {
+			t.Fatalf("parseDefinitionLabel(%q) failed", tc.line)
+		}
+		if got := d.footnote(); got != tc.footnote {
+			t.Errorf("parseDefinitionLabel(%q).footnote() = %v, want %v", tc.line, got, tc.footnote)
+		}
+		if got := d.refLabel(); !tc.footnote && got != tc.label {
+			t.Errorf("parseDefinitionLabel(%q).refLabel() = %q, want %q", tc.line, got, tc.label)
 		}
 	}
 }

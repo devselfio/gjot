@@ -155,18 +155,38 @@ func divClass(class string) bool {
 
 // definitionLabel is the opening of a reference or footnote definition:
 // "[label]:" or "[^label]:". rest is what follows the colon and the spaces
-// and tabs after it; restCol is rest's byte offset in the line.
+// and tabs after it; restCol is rest's byte offset in the line. isFootnote
+// says the label was written "^label" with a non-empty label (label then
+// holds it without the '^'); spaced says a space, a tab or the line's end
+// follows the colon. Which kind of definition the line opens is footnote's
+// and refLabel's answer, not isFootnote's.
 type definitionLabel struct {
 	label      string
 	rest       string
 	restCol    int
 	isFootnote bool
+	spaced     bool
 }
 
-// parseDefinitionLabel reports whether a line, after its indent, opens a
-// reference definition ("[label]:" then a space, a tab or the line's end)
-// or a footnote definition ("[^label]:" with a non-empty label). "[^]:" is a
-// reference labelled "^".
+// footnote reports whether the line opens a footnote definition: a
+// "[^label]:" followed by a space, a tab or the line's end. "[^n]:x" opens a
+// reference definition labelled "^n" (zjot.test L7462).
+func (d definitionLabel) footnote() bool { return d.isFootnote && d.spaced }
+
+// refLabel is the label of the reference definition the line opens when it
+// opens no footnote: the label as written, with its '^' if it had one.
+func (d definitionLabel) refLabel() string {
+	if d.isFootnote {
+		return "^" + d.label
+	}
+	return d.label
+}
+
+// parseDefinitionLabel reports whether a line, after its indent, starts
+// with "[label]:" or "[^label]:", whatever follows the colon. "[^]:" is a
+// reference labelled "^". Whether the line opens a footnote or a reference
+// is left to the caller, through footnote and refLabel, as zjot's
+// Parser.zig decides it rather than leaf.zig.
 func parseDefinitionLabel(line string) (definitionLabel, bool) {
 	start := countIndent(line)
 	rest := line[start:]
@@ -178,10 +198,8 @@ func parseDefinitionLabel(line string) (definitionLabel, bool) {
 		return definitionLabel{}, false
 	}
 	after := close + 2
-	if after < len(rest) && !isSpaceOrTab(rest[after]) && rest[after] != '\r' {
-		return definitionLabel{}, false
-	}
 	d := definitionLabel{label: rest[1:close]}
+	d.spaced = after == len(rest) || isSpaceOrTab(rest[after]) || rest[after] == '\r'
 	if len(d.label) > 1 && d.label[0] == '^' {
 		d.label, d.isFootnote = d.label[1:], true
 	}
