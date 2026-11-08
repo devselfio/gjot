@@ -1,6 +1,9 @@
 package gjot
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // stack.go is the block parser as a container stack, in the shape of zjot
 // v2.0.0's Parser.zig (itself djot.js's block.js), built beside the window
@@ -435,8 +438,16 @@ func (p *stackParser) continues(c *container, cur *cursor) bool {
 		}
 		cur.i++
 		return true
-	case kindList, kindListItem:
-		return false // slice 3
+	case kindList:
+		// A blank line or a deeper indent continues a list; at or left of
+		// its indent, only a marker it accepts does (its item then opens).
+		if cur.atEOL() || cur.indent > c.data.list.indent {
+			return true
+		}
+		sm, ok := listMarker(cur.rest())
+		return ok && c.data.list.accepts(sm)
+	case kindListItem:
+		return cur.atEOL() || cur.indent > c.data.indent
 	case kindFootnote:
 		return cur.atEOL() || cur.indent > c.data.indent
 	case kindDiv:
@@ -529,8 +540,12 @@ func (p *stackParser) continuesAttributes(c *container, cur *cursor) bool {
 	return !cur.atEOL()
 }
 
-// stackMarker is a list marker at the start of a line's content. Filled in
-// by slice 3.
+// stackMarker is a list marker at the start of a line's content: the kind
+// of list it opens or continues, what its items share, how many bytes the
+// cursor moves over it (the marker byte alone for a bullet or definition
+// marker; for an ordered marker, up to the rest its parser leaves, and for
+// a task marker that and the box; spaces left after are skipped by the
+// cursor either way), and a task item's box.
 type stackMarker struct {
 	kind    listKind
 	bullet  byte
@@ -542,9 +557,43 @@ type stackMarker struct {
 	m       marker
 }
 
-// listMarker reads a list marker at the start of rest. A stub until slice
-// 3: no list opens yet.
-func listMarker(rest string) (stackMarker, bool) { return stackMarker{}, false }
+// listMarker reads a list marker at the start of rest, as djot.js's
+// getListStyles: a bullet followed by a task box is the task style whatever
+// the bullet, a bare bullet its own style, ':' a definition, and an ordered
+// marker the styles it may be with its delimiter.
+func listMarker(rest string) (stackMarker, bool) {
+	if m, ok := parseBulletMarker(rest); ok {
+		width := len(rest) - len(m.rest)
+		if isTaskItem(m.rest) {
+			checked := m.rest[1] != ' '
+			return stackMarker{kind: listTask, bullet: m.bullet, advance: width + 3, checked: &checked, text: m.markerText, m: m}, true
+		}
+		return stackMarker{kind: listBullet, bullet: m.bullet, advance: 1, text: m.markerText, m: m}, true
+	}
+	if rest != "" && rest[0] == ':' && (len(rest) == 1 || isSpaceOrTab(rest[1])) {
+		return stackMarker{kind: listDefinition, bullet: ':', advance: 1, text: ":"}, true
+	}
+	if m, ok := parseOrderedMarker(rest); ok {
+		return stackMarker{kind: listOrdered, ordered: orderedStyles{possible: m.styles}, delim: m.delim, advance: len(rest) - len(m.rest), text: m.markerText, m: m}, true
+	}
+	return stackMarker{}, false
+}
+
+// accepts reports whether marker sm continues list l: the same kind, the
+// same bullet for a bullet list, and for an ordered list the same delimiter
+// and a style the list may still be.
+func (l *listData) accepts(sm stackMarker) bool {
+	if sm.kind != l.style {
+		return false
+	}
+	switch l.style {
+	case listBullet:
+		return sm.bullet == l.bullet
+	case listOrdered:
+		return sm.delim == l.delim && l.ordered.matches(sm.m)
+	}
+	return true
+}
 
 // tryOpen tries the block starts at cur, in djot.js's order; on one, it
 // closes the containers above matched, pushes the new one and moves cur
@@ -553,7 +602,20 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	r := cur.rest()
 	s := cur.stand()
 	if matched > 0 && p.stack[matched-1].kind.content() == contentItems {
-		return false // an item under a list: slice 3
+		// Under a list only its next item opens: the item before closes
+		// here, and an ordered list narrows to the styles both share.
+		list := &p.stack[matched-1].data.list
+		sm, ok := listMarker(r)
+		if !ok || !list.accepts(sm) {
+			return false
+		}
+		p.closeFrom(matched, s)
+		if list.style == listOrdered {
+			list.ordered.accept(sm.m)
+		}
+		p.push(kindListItem, containerData{indent: cur.indent, checked: sm.checked}, cur.pos())
+		cur.i += sm.advance
+		return true
 	}
 	if startsBlockQuote(r) {
 		p.closeFrom(matched, s)
@@ -602,8 +664,15 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		cur.i = len(cur.line.text)
 		return true
 	}
-	if _, ok := listMarker(r); ok {
-		return false // slice 3
+	if sm, ok := listMarker(r); ok {
+		// The list opens on its first marker and leaves cur there, so the
+		// item opens under it on the next try.
+		p.closeFrom(matched, s)
+		p.push(kindList, containerData{list: listData{
+			style: sm.kind, bullet: sm.bullet, ordered: sm.ordered, delim: sm.delim,
+			indent: cur.indent, markerText: sm.text, tight: true,
+		}}, cur.pos())
+		return true
 	}
 	// A table row: slice 4.
 	// A block attribute opens only when its first line parses so far or
@@ -958,8 +1027,12 @@ func (p *stackParser) close(s stand) {
 		}
 		*slot = nil
 		return
+	case kindList:
+		n = p.spanned(p.listNodeOf(c), c.start, s.pos)
+	case kindListItem:
+		n = p.spanned(p.itemNode(c), c.start, s.before)
 	default:
-		// Lists, items, tables and captions: slices 3 and 4.
+		// Tables and captions: slice 4.
 		p.dropLeaf()
 		return
 	}
@@ -1000,4 +1073,51 @@ func (p *stackParser) tableBefore() *Node {
 		return siblings[n-1]
 	}
 	return nil
+}
+
+// listNodeOf is the node a closing list makes, in today's tree: a bullet or
+// task list with its tightness and first bullet, an ordered list with its
+// start and HTML type as attributes, or a definition list.
+func (p *stackParser) listNodeOf(c *container) *Node {
+	l := c.data.list
+	switch l.style {
+	case listTask:
+		return &Node{Tag: TaskList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
+	case listDefinition:
+		return &Node{Tag: DefinitionList, Children: c.children}
+	case listOrdered:
+		style := styleDecimal
+		if len(l.ordered.possible) > 0 {
+			style = l.ordered.possible[0]
+		}
+		var attrs []Attr
+		if start := getListStart(l.markerText, style); start != 1 {
+			attrs = append(attrs, Attr{"start", strconv.Itoa(start)})
+		}
+		if t := style.htmlType(); t != "" {
+			attrs = append(attrs, Attr{"type", t})
+		}
+		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Attrs: attrs}
+	}
+	return &Node{Tag: BulletList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
+}
+
+// itemNode is the node a closing item makes; its list is the tip. A
+// definition list's item takes its first paragraph's inlines as the term
+// and the rest as the definition. Only the paragraph's inlines move, so a
+// block attribute on it (its id already registered) is not on the Term:
+// today's tree, which the corpus does not cover.
+func (p *stackParser) itemNode(c *container) *Node {
+	switch p.tip().data.list.style {
+	case listTask:
+		return &Node{Tag: TaskListItem, Children: c.children, Checked: c.data.checked}
+	case listDefinition:
+		term, blocks := &Node{Tag: Term}, c.children
+		if len(blocks) > 0 && blocks[0].Tag == Para {
+			term.Children = blocks[0].Children
+			blocks = blocks[1:]
+		}
+		return &Node{Tag: DefinitionListItem, Children: []*Node{term, {Tag: Definition, Children: blocks}}}
+	}
+	return &Node{Tag: ListItem, Children: c.children}
 }
