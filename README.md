@@ -83,7 +83,9 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 | `(*Node).HasClass(string) bool`, `(*Node).Attr(string) string` | Class and attribute lookup for hooks |
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
-through `json.Unmarshal` to the same AST text. Source positions are kept only
+through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the
+quote it was written as in `"source"` (`Node.Source`, empty on every other
+node), which alt text, heading ids and the writer read. Source positions are kept only
 when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
 the inline nodes inside them. A definition list item's term and definition
 carry none, as zjot's AST prints none; the footnote section built at the end
@@ -133,7 +135,7 @@ go test -run 'TestSpec$' -v . | grep 'corpus:'
 ```
 
 `TestJSONRoundTrip` marshals every case's AST to JSON and back and compares the
-AST text, with and without source positions.
+AST text and the HTML, with and without source positions.
 
 `go run ./cmd/driftcheck` compares that corpus with zjot's at the ref pinned in
 `ORIGIN.md` and exits non-zero naming each file that differs. It needs the

@@ -81,7 +81,7 @@ func lit(text string) *Node {
 // the glyph it renders as, and the quote it was written as, which is what a
 // heading id or reference label reads (djot.js smart_punctuation text).
 func quoteLit(glyph, source string) *Node {
-	return &Node{Tag: Str, Text: glyph, source: source}
+	return &Node{Tag: Str, Text: glyph, Source: source}
 }
 
 // at records n's extent [start, end) in the inline source and returns n.
@@ -97,7 +97,7 @@ func at(n *Node, start, end int) *Node {
 func tail(n *Node, start int) *Node {
 	t := &Node{Tag: Str, Text: n.Text[start:]}
 	if start == 0 {
-		t.source = n.source // the whole literal: a smart quote keeps its quote
+		t.Source = n.Source // the whole literal: a smart quote keeps its quote
 	}
 	switch {
 	case n.off > 0:
@@ -1088,8 +1088,8 @@ func stringContent(nodes []*Node, footnoteLabels bool) string {
 		for _, n := range nodes {
 			switch n.Tag {
 			case Str:
-				if n.source != "" {
-					b.WriteString(n.source)
+				if n.Source != "" {
+					b.WriteString(n.Source)
 				} else {
 					b.WriteString(n.Text)
 				}

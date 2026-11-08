@@ -122,18 +122,18 @@ type Node struct {
 	Style       string    `json:"style,omitempty"`
 	// AutoID is set when ID was generated from heading text rather than
 	// written in the source, so a writer can omit it.
-	AutoID bool   `json:"auto_id,omitempty"`
+	AutoID bool `json:"auto_id,omitempty"`
+	// Source is set only on a literal smart quote (a Str whose Text is ‘ ’
+	// “ or ” and was written as ' or "): the quote it was written as. Heading
+	// ids, reference labels, image alt text and the Djot writer read it, as
+	// djot.js reads smart punctuation as its source; it is "" on every other
+	// node, and absent from the JSON form there.
+	Source string `json:"source,omitempty"`
 	Pos    *Range `json:"pos,omitempty"`
 
 	// off is the offset of Text in the inline source it was sliced from,
 	// plus one; 0 means Text is not a slice of it. Parse-time only.
 	off int
-	// source is the source text a literal text node stands for when it
-	// differs from Text (a smart quote's ' or "). Set by the parser and read
-	// by heading ids, reference labels, image alt text and the writer; it is
-	// not in the JSON form, so a tree decoded from JSON reads such a node as
-	// its glyph (alt="Don’t" where the parsed tree gives alt="Don't").
-	source string
 	// src is the node's extent in the inline source. Parse-time only.
 	src srcSpan
 }
