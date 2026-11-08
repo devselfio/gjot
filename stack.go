@@ -541,9 +541,11 @@ func (p *stackParser) continuesAttributes(c *container, cur *cursor) bool {
 }
 
 // stackMarker is a list marker at the start of a line's content: the kind
-// of list it opens or continues, what its items share, how far past it the
-// item's content starts (a task item's box included), and a task item's
-// box.
+// of list it opens or continues, what its items share, how many bytes the
+// cursor moves over it (the marker byte alone for a bullet or definition
+// marker; for an ordered marker, up to the rest its parser leaves, and for
+// a task marker that and the box; spaces left after are skipped by the
+// cursor either way), and a task item's box.
 type stackMarker struct {
 	kind    listKind
 	bullet  byte
@@ -1102,7 +1104,9 @@ func (p *stackParser) listNodeOf(c *container) *Node {
 
 // itemNode is the node a closing item makes; its list is the tip. A
 // definition list's item takes its first paragraph's inlines as the term
-// and the rest as the definition.
+// and the rest as the definition. Only the paragraph's inlines move, so a
+// block attribute on it (its id already registered) is not on the Term:
+// today's tree, which the corpus does not cover.
 func (p *stackParser) itemNode(c *container) *Node {
 	switch p.tip().data.list.style {
 	case listTask:
