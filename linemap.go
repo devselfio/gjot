@@ -6,14 +6,19 @@ type lineMap struct {
 	segments []lineSegment
 }
 
+// lineSegment is one source line's slice of the joined text: where it
+// starts in the joined text, where it starts in the source, and where that
+// source line's newline is (srcLine.eol).
 type lineSegment struct {
 	joinedStart int
 	orig        SourcePos
+	eol         SourcePos
 }
 
 // resolve maps an offset in the joined text to its source position. The
-// newline that joins a line to the next is reported as the next line,
-// column 0, at the newline's own offset, as zjot reports it. This relies on
+// newline that joins a line to the next is reported as that line's own
+// newline, as zjot reports it, even when a source line with no slice (a
+// heading's bare marker line) stands between the two. This relies on
 // parseParagraph joining lines with exactly one "\n" byte: the byte just
 // before a segment's joinedStart is taken to be that newline.
 func (m lineMap) resolve(joinedOffset int) SourcePos {
@@ -30,7 +35,7 @@ func (m lineMap) resolve(joinedOffset int) SourcePos {
 	seg := m.segments[best]
 	delta := joinedOffset - seg.joinedStart
 	if best+1 < len(m.segments) && joinedOffset == m.segments[best+1].joinedStart-1 {
-		return SourcePos{Line: m.segments[best+1].orig.Line, Col: 0, Offset: seg.orig.Offset + delta}
+		return seg.eol
 	}
 	return SourcePos{Line: seg.orig.Line, Col: seg.orig.Col + delta, Offset: seg.orig.Offset + delta}
 }
