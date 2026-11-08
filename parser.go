@@ -5,9 +5,8 @@ import (
 	"strings"
 )
 
-// stack.go is the block parser as a container stack, in the shape of zjot
-// v2.0.0's Parser.zig (itself djot.js's block.js), built beside the window
-// parser behind withStack() (farraway/gridapp#12). Each line is run against
+// parser.go is the block parser as a container stack, in the shape of zjot
+// v2.0.0's Parser.zig (itself djot.js's block.js). Each line is run against
 // the open containers from the outermost in (continues), then against the
 // block starts while the innermost matched container holds blocks (tryOpen);
 // what remains is lazy text for an open paragraph or heading, a blank line,
@@ -302,8 +301,8 @@ type stackParser struct {
 	lineCount, lastBlockLine int
 }
 
-// parseStack parses input with the container stack into the same tree the
-// window parser builds.
+// parseStack parses input with the container stack into the whole document
+// tree: the root Section that Parse returns.
 func parseStack(input string, trackPos bool) *Node {
 	p := &stackParser{lines: splitLines(input), doc: newDocument(trackPos), trackPos: trackPos, leafLastNewline: true}
 	blocks := p.parseAll()
