@@ -461,7 +461,7 @@ func (w *inlineWriter) nodes(nodes []*Node) {
 			var text strings.Builder
 			var apos []int
 			for j = i; j < len(nodes) && isText(nodes[j]); j++ {
-				if t := nodes[j]; t.Text == apostrophe && t.source == "'" {
+				if t := nodes[j]; t.Text == apostrophe && t.Source == "'" {
 					apos = append(apos, text.Len())
 				}
 				text.WriteString(nodes[j].Text)
@@ -529,7 +529,9 @@ func (w *inlineWriter) attrs(n *Node) {
 func (w *inlineWriter) node(n *Node, next *Node) {
 	switch n.Tag {
 	case Str, Escape:
-		w.text(n.Text, nil, next) // nodes merges text runs; not reached from there
+		// nodes, node's only caller, writes text runs itself; this case is
+		// kept so that a text node is never silently dropped.
+		w.text(n.Text, nil, next)
 	case SoftBreak:
 		w.write("\n")
 	case HardBreak:
@@ -679,7 +681,7 @@ func isSymbolChar(c byte) bool {
 // characters are escaped only where they could combine into markup.
 //
 // apos holds the offsets, in ascending order, of each ’ in text that was
-// parsed from a ' (Node.source); before is what was written ahead of text.
+// parsed from a ' (Node.Source); before is what was written ahead of text.
 // Such a ’ is written back as ' when the character before it allows (see
 // apostropheAfter), so it reads back with that source: a heading id reads
 // "Don't", not "Don’t". A ’ typed as the glyph is always written as the
