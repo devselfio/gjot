@@ -84,9 +84,9 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text. Source positions are kept only
-when parsed with `WithSourcePos`. Paragraphs and lists carry them at any
-nesting depth, as does every inline node inside a paragraph; headings,
-sections, block quotes, divs, tables and the other blocks do not yet.
+when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
+the inline nodes inside them; a definition list item's term and definition and
+the footnote section built at the end do not yet.
 
 Two things the writer cannot express, because the syntax has no form for them:
 an empty verbatim span in the middle of a paragraph (it is written as a trailing
@@ -140,17 +140,22 @@ network, so it is not part of `go test`.
 
 ## Architecture
 
-gjot is a single-phase recursive descent parser, file for file the shape of
-zjot with the Zig allocator plumbing removed. One pass through the input builds
-the `Node` tree directly; references, footnotes and sections are resolved after
-the block pass.
+gjot's block parser is a container stack, in the shape of zjot v2.0.0's
+`Parser.zig` with the Zig allocator plumbing and the streaming removed. Each
+line is run against the open containers from the outermost in; while the
+innermost container it continues holds blocks, the line may open new ones; what
+remains is lazy text for an open paragraph, a blank line, or text for the
+innermost container. A container closes when a line neither continues it nor is
+lazy text for it. One pass through the input builds the whole `Node` tree. Ids
+are registered where they stand; references, footnotes and sections are resolved
+after the pass.
 
 ```
 gjot.go          Public API: Parse, WithSourcePos, HTML
 node.go          AST types (Node, Tag, Attr, SourcePos, Range) and hook helpers
-parser.go        Block parsing, references, footnotes, sections, position tracking
-lists.go         Bullet, ordered, task and definition lists
-tables.go        Pipe tables and captions
+parser.go        Block parsing: the container stack over lines
+leaf.go          What one line says (fences, markers, table rows, ...)
+document.go      Definitions, ids, references, sections, footnotes
 inline.go        Inline parsing (emphasis, links, smart quotes, ...)
 attributes.go    Attribute parser ({#id .class key=value})
 linemap.go       Source position mapping for joined inline text

@@ -83,20 +83,19 @@ func parseSpecFile(content string) []specCase {
 
 // checkCase is the verdict on one non-filter case: its expected output, then
 // the writer round trip (written back to Djot and re-rendered, the result must
-// not change). A nil error means the case passes. opts go to every Parse call,
-// so the same verdict can be had from the container stack (withStack).
-func checkCase(c specCase, opts ...ParseOption) error {
+// not change). A nil error means the case passes.
+func checkCase(c specCase) error {
 	input := []byte(c.input)
 	var got []byte
 	if c.ast {
-		posOpts := append([]ParseOption(nil), opts...)
+		var posOpts []ParseOption
 		if c.sourcepos {
 			posOpts = append(posOpts, WithSourcePos())
 		}
 		got = ASTText(Parse(input, posOpts...))
 	} else {
 		var err error
-		got, err = HTML(Parse(input, opts...))
+		got, err = HTML(Parse(input))
 		if err != nil {
 			return err
 		}
@@ -106,16 +105,16 @@ func checkCase(c specCase, opts ...ParseOption) error {
 			c.input, c.expected, got)
 	}
 
-	djot := Djot(Parse(input, opts...))
+	djot := Djot(Parse(input))
 	if c.ast {
-		want := ASTText(Parse(input, opts...))
-		if got := ASTText(Parse(djot, opts...)); string(got) != string(want) {
+		want := ASTText(Parse(input))
+		if got := ASTText(Parse(djot)); string(got) != string(want) {
 			return fmt.Errorf("round trip: AST changed\n---input---\n%s---written---\n%s---expected ast---\n%s---got---\n%s---end---",
 				c.input, djot, want, got)
 		}
 		return nil
 	}
-	got, err := HTML(Parse(djot, opts...))
+	got, err := HTML(Parse(djot))
 	if err != nil {
 		return err
 	}

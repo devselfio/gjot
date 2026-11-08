@@ -6,9 +6,8 @@ import (
 )
 
 // leaf.go is what one line says, in the shape of zjot v2.0.0's leaf.zig:
-// pure functions over a single line, used by the container stack. Unlike
-// the window parser's helpers (the win* functions), a tab is one column
-// here, as in djot.js.
+// pure functions over a single line, used by the container stack. A tab is
+// one column, as in djot.js.
 
 // isBlank reports whether a line holds only spaces, tabs and a carriage
 // return.
@@ -559,4 +558,25 @@ func romanToNumber(s string) int {
 		return 1
 	}
 	return total
+}
+
+func isRomanLower(c byte) bool { return strings.IndexByte("ivxlcdm", c) >= 0 }
+func isRomanUpper(c byte) bool { return strings.IndexByte("IVXLCDM", c) >= 0 }
+
+// skipBacktickSpan returns the index past the backtick span opening at
+// start, or len(text) when it never closes.
+func skipBacktickSpan(text string, start int) int {
+	run := countRunAt(text, start, '`')
+	for k := start + run; k < len(text); {
+		if text[k] != '`' {
+			k++
+			continue
+		}
+		r2 := countRunAt(text, k, '`')
+		if r2 == run {
+			return k + r2
+		}
+		k += r2
+	}
+	return len(text)
 }

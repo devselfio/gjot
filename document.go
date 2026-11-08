@@ -288,3 +288,21 @@ func (d *document) footnoteSection() *Node {
 	}
 	return &Node{Tag: Footnote, Children: items, Attrs: []Attr{{"role", "doc-endnotes"}}}
 }
+
+// headingIDText is the raw source from the first to the last top-level text
+// node of a heading: what its auto id and implicit reference derive from.
+func headingIDText(src string, inlines []*Node) string {
+	first, end := -1, 0
+	for _, c := range inlines {
+		if c.Tag == Str && c.Text != "" && c.off > 0 {
+			if first < 0 {
+				first = c.off - 1
+			}
+			end = c.off - 1 + len(c.Text)
+		}
+	}
+	if first < 0 {
+		return ""
+	}
+	return src[first:end]
+}
