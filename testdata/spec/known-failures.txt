@@ -3,17 +3,14 @@
 grid.test L114
 grid.test L232
 grid.test L244
-grid.test L451
 grid.test L622
 grid.test L653
 grid.test L686
 grid.test L721
 grid.test L770
-grid.test L972
 grid.test L1166
 grid.test L1214
 grid.test L1226
-grid.test L1265
 grid.test L1311
 grid.test L1344
 grid.test L1379
@@ -28,11 +25,6 @@ zjot.test L1845
 zjot.test L1867
 zjot.test L2410
 zjot.test L2458
-zjot.test L2484
-zjot.test L2506
-zjot.test L2594
-zjot.test L2608
-zjot.test L2624
 zjot.test L3051
 zjot.test L3060
 zjot.test L3069
@@ -63,9 +55,6 @@ zjot.test L5020
 zjot.test L5141
 zjot.test L5158
 zjot.test L5170
-zjot.test L5279
-zjot.test L5321
-zjot.test L5347
 zjot.test L5455
 zjot.test L5490
 zjot.test L5500
@@ -106,7 +95,6 @@ zjot.test L6642
 zjot.test L6775
 zjot.test L6808
 zjot.test L6824
-zjot.test L6884
 zjot.test L6928
 zjot.test L6941
 zjot.test L6951

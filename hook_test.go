@@ -47,6 +47,23 @@ func TestHookWrapsChildrenAndNests(t *testing.T) {
 	}
 }
 
+// A hook stands in for the div only: the enclosing tight list still renders
+// the paragraphs inside it bare, as it does an unhooked div's.
+func TestHookInTightItemKeepsListTightness(t *testing.T) {
+	aside := func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+		if entering {
+			io.WriteString(w, "<aside>\n")
+		} else {
+			io.WriteString(w, "</aside>\n")
+		}
+		return WalkContinue, nil
+	}
+	got := renderWith(t, "- ::: d\n  q\n  :::\n", WithHook("d", aside))
+	if want := "<ul>\n<li>\n<aside>\nq\n</aside>\n</li>\n</ul>\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestHookUnregisteredClassRendersDefault(t *testing.T) {
 	got := renderWith(t, "{fen=abc}\n::: chess\n:::\n", WithHook("other", func(io.Writer, *Node, bool) (WalkStatus, error) {
 		t.Error("hook for another class called")
