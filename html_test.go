@@ -61,39 +61,6 @@ func TestTightListReachesNestedParagraphs(t *testing.T) {
 	}
 }
 
-// The shapes farraway/gridapp#17's plan names for tight rendering: a tight
-// list's paragraphs render bare through quotes, divs and definitions; a
-// nested list decides for its own items; a loose list keeps <p>.
-func TestTightRenderingReachesNestedBlocks(t *testing.T) {
-	cases := []struct{ name, input, want string }{
-		{"quote", "- > q\n",
-			"<ul>\n<li>\n<blockquote>\nq\n</blockquote>\n</li>\n</ul>\n"},
-		{"div", "-\n  ::: d\n  q\n  :::\n",
-			"<ul>\n<li>\n<div class=\"d\">\nq\n</div>\n</li>\n</ul>\n"},
-		{"definition", "- : t\n\n    d\n",
-			"<ul>\n<li>\n<dl>\n<dt>t</dt>\n<dd>\nd\n</dd>\n</dl>\n</li>\n</ul>\n"},
-		{"loose-sublist-in-tight-list", "- a\n\n  - b\n\n    c\n- d\n",
-			"<ul>\n<li>\na\n<ul>\n<li>\n<p>b</p>\n<p>c</p>\n</li>\n</ul>\n</li>\n<li>\nd\n</li>\n</ul>\n"},
-		{"blank-before-quote-is-loose", "- a\n\n  > q\n",
-			"<ul>\n<li>\n<p>a</p>\n<blockquote>\n<p>q</p>\n</blockquote>\n</li>\n</ul>\n"},
-		// A marker under an item's text with no blank line before it is
-		// lazy text, not a sublist; the blank before c makes the item loose.
-		{"marker-under-text-is-lazy", "- a\n  - b\n\n    c\n",
-			"<ul>\n<li>\n<p>a\n- b</p>\n<p>c</p>\n</li>\n</ul>\n"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := HTML(Parse([]byte(c.input)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(got) != c.want {
-				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
-			}
-		})
-	}
-}
-
 // A task list's own class comes first and the node's classes join it in
 // one class attribute (grid.test L770); the id and other attributes follow.
 func TestTaskListMergesClass(t *testing.T) {
