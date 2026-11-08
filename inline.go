@@ -32,7 +32,13 @@ type inlineItem struct {
 }
 
 type inlineParser struct {
-	src       string
+	src string
+	// attrsFrom: no inline attribute is read before this offset (the text a
+	// failed block attribute took, which djot.js reparses without them).
+	attrsFrom int
+	// dropped collects the ids of inline attributes left on no node, which
+	// were registered all the same (djot.js).
+	dropped   []string
 	items     []inlineItem
 	openers   []openerInfo
 	pos       int
@@ -47,8 +53,18 @@ func parseInlines(lines []string) []*Node {
 }
 
 func parseInlineContent(src string) []*Node {
-	p := &inlineParser{src: src}
-	return p.parse()
+	nodes, _ := parseLeafInlines(src, 0)
+	return nodes
+}
+
+// parseLeafInlines is parseInlineContent for the container stack: no inline
+// attribute is read at an offset before attrsFrom, and the ids of inline
+// attributes that attached to no node (or that a later id replaced) are
+// returned rather than lost.
+func parseLeafInlines(src string, attrsFrom int) (nodes []*Node, droppedIDs []string) {
+	p := &inlineParser{src: src, attrsFrom: attrsFrom}
+	nodes = p.parse()
+	return nodes, p.dropped
 }
 
 // strNode is a text node sliced from the inline source at off.
@@ -168,7 +184,7 @@ func (p *inlineParser) parse() []*Node {
 				}
 			}
 			p.flushText()
-			if ba, end, ok := parseInlineAttrs(src, p.pos); ok {
+			if ba, end, ok := p.inlineAttrs(p.pos); ok {
 				if !ba.empty() {
 					p.items = append(p.items, inlineItem{kind: itemAttrs, attrs: ba})
 				}
@@ -510,7 +526,7 @@ func (p *inlineParser) handleCloseBracket() {
 					return
 				}
 			case '{':
-				if ba, end, ok := parseInlineAttrs(src, p.pos); ok {
+				if ba, end, ok := p.inlineAttrs(p.pos); ok {
 					// The span ends at its "]"; the attributes are not part of it.
 					span := at(&Node{Tag: Span, Children: children}, op.srcPos, pos+1)
 					applyBlockAttrs(span, ba)
@@ -734,7 +750,7 @@ func (p *inlineParser) collectChildren(openerIdx int) []*Node {
 		case itemOpener:
 			children = append(children, openerLit(it.opener))
 		case itemAttrs:
-			children = applyAttrsToResolved(children, it.attrs)
+			children = p.attach(children, it.attrs)
 		}
 	}
 	p.items = p.items[:openerIdx]
@@ -796,7 +812,7 @@ func (p *inlineParser) resolveItems() []*Node {
 		case itemOpener:
 			nodes = append(nodes, openerLit(it.opener))
 		case itemAttrs:
-			nodes = applyAttrsToResolved(nodes, it.attrs)
+			nodes = p.attach(nodes, it.attrs)
 		}
 	}
 	return nodes
@@ -804,26 +820,29 @@ func (p *inlineParser) resolveItems() []*Node {
 
 func isWordSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
 
-// applyAttrsToResolved attaches ba to the node before it: a container node
-// takes the attributes directly; trailing text has its last word wrapped in
-// a span, gathering back across adjacent text nodes to the word's start.
-func applyAttrsToResolved(nodes []*Node, ba blockAttrs) []*Node {
+// attachAttrs attaches ba to the node before it: a container node takes the
+// attributes directly; trailing text has its last word wrapped in a span,
+// gathering back across adjacent text nodes to the word's start. It also
+// reports the id the attributes registered and left on no node: theirs when
+// they attached to nothing, or the id they replaced on the node they
+// attached to.
+func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 	if len(nodes) == 0 {
-		return nodes
+		return nodes, ba.id
 	}
 	last := nodes[len(nodes)-1]
 	switch last.Tag {
 	case Str:
 		text := last.Text
 		if text == "" {
-			return nodes
+			return nodes, ba.id
 		}
 		wordStart := len(text)
 		for wordStart > 0 && !isWordSpace(text[wordStart-1]) {
 			wordStart--
 		}
 		if wordStart == len(text) {
-			return nodes
+			return nodes, ba.id
 		}
 
 		gatherStart := len(nodes) - 1
@@ -865,18 +884,23 @@ func applyAttrsToResolved(nodes []*Node, ba blockAttrs) []*Node {
 		case wordStart > 0 && gatherStart < len(nodes)-1:
 			first := nodes[gatherStart]
 			first.Text = first.Text[:wordStart]
-			return append(nodes[:gatherStart+1], span)
+			return append(nodes[:gatherStart+1], span), ""
 		case wordStart > 0:
 			last.Text = text[:wordStart]
-			return append(nodes, span)
+			return append(nodes, span), ""
 		default:
-			return append(nodes[:gatherStart], span)
+			return append(nodes[:gatherStart], span), ""
 		}
 	case Span, Link, Image, Emph, Strong, Verbatim, Mark,
 		Superscript, Subscript, Insert, Delete, DoubleQuoted, SingleQuoted:
+		replaced := ""
+		if ba.id != "" {
+			replaced = last.ID
+		}
 		applyBlockAttrs(last, ba)
+		return nodes, replaced
 	}
-	return nodes
+	return nodes, ba.id
 }
 
 // applyBlockAttrs layers ba over the node's own attributes, so an attribute
@@ -1083,4 +1107,22 @@ func childrenSpan(children []*Node) srcSpan {
 		span.end = s.end
 	}
 	return span
+}
+
+// inlineAttrs parses an inline attribute at pos, unless pos is before
+// attrsFrom.
+func (p *inlineParser) inlineAttrs(pos int) (blockAttrs, int, bool) {
+	if pos < p.attrsFrom {
+		return blockAttrs{}, 0, false
+	}
+	return parseInlineAttrs(p.src, pos)
+}
+
+// attach is attachAttrs, keeping the id it leaves on no node.
+func (p *inlineParser) attach(nodes []*Node, ba blockAttrs) []*Node {
+	nodes, dropped := attachAttrs(nodes, ba)
+	if dropped != "" {
+		p.dropped = append(p.dropped, dropped)
+	}
+	return nodes
 }

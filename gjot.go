@@ -5,11 +5,20 @@ type ParseOption func(*parseConfig)
 
 type parseConfig struct {
 	sourcePos bool
+	// stack selects the container stack (stack.go) over the window parser
+	// while the stack is built beside it (farraway/gridapp#12).
+	stack bool
 }
 
 // WithSourcePos records each node's source range in Node.Pos.
 func WithSourcePos() ParseOption {
 	return func(c *parseConfig) { c.sourcePos = true }
+}
+
+// withStack makes Parse use the container stack. Unexported: for the tests,
+// until the stack replaces the window parser.
+func withStack() ParseOption {
+	return func(c *parseConfig) { c.stack = true }
 }
 
 // Parse parses Djot source into an AST. It never fails: every byte sequence
@@ -18,6 +27,9 @@ func Parse(src []byte, opts ...ParseOption) *Node {
 	var cfg parseConfig
 	for _, o := range opts {
 		o(&cfg)
+	}
+	if cfg.stack {
+		return parseStack(string(src), cfg.sourcePos)
 	}
 	p := newParser(string(src), newSharedState())
 	p.trackPos = cfg.sourcePos
