@@ -65,8 +65,8 @@ type fenceInfo struct {
 }
 
 // isCodeFence reports whether a line opens a code block: three or more
-// backticks or tildes, then at most one word. A backtick fence's word may
-// not hold a backtick.
+// backticks or tildes, then at most one word. The word may not hold a
+// backtick, whichever character the fence is made of.
 func isCodeFence(line string) (fenceInfo, bool) {
 	indent := countIndent(line)
 	rest := line[indent:]
@@ -79,7 +79,7 @@ func isCodeFence(line string) (fenceInfo, bool) {
 		return fenceInfo{}, false
 	}
 	lang := strings.Trim(rest[length:], " \t\r")
-	if strings.ContainsAny(lang, " \t") || (char == '`' && strings.IndexByte(lang, '`') >= 0) {
+	if strings.ContainsAny(lang, " \t") || strings.IndexByte(lang, '`') >= 0 {
 		return fenceInfo{}, false
 	}
 	return fenceInfo{length: length, char: char, lang: lang, indent: indent}, true
