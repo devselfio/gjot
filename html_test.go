@@ -38,7 +38,7 @@ func TestTightListReachesNestedParagraphs(t *testing.T) {
 		{"loose-list-in-quote-then-tight-item",
 			"- > - a\n  >\n  > - b\n- d\n",
 			"<ul>\n<li>\n<blockquote>\n<ul>\n<li>\n<p>a</p>\n</li>\n<li>\n<p>b</p>\n</li>\n</ul>\n</blockquote>\n</li>\n<li>\nd\n</li>\n</ul>\n"},
-		{"loose-sublist-then-tight-paragraph",
+		{"tight-quote-then-loose-sublist",
 			"- > q\n  - a\n\n    b\n  - c\n",
 			"<ul>\n<li>\n<blockquote>\nq\n</blockquote>\n<ul>\n<li>\n<p>a</p>\n<p>b</p>\n</li>\n<li>\n<p>c</p>\n</li>\n</ul>\n</li>\n</ul>\n"},
 		{"paragraph-after-tight-list",
