@@ -176,8 +176,13 @@ func (r *renderer) render(n *Node) {
 		r.tight = old
 		r.w("</ol>\n")
 	case TaskList:
-		r.w("<ul class=\"task-list\"")
-		r.attrs(n)
+		r.w("<ul class=\"task-list")
+		for _, c := range n.classList() {
+			r.w(" ")
+			r.attrEsc(c)
+		}
+		r.w("\"")
+		r.attrsWithoutClass(n)
 		r.w(">\n")
 		old := r.tight
 		r.tight = n.Tight
@@ -421,6 +426,21 @@ func (r *renderer) attrs(n *Node) {
 		r.w(" class=\"")
 		r.attrEsc(n.Classes)
 		r.w("\"")
+	}
+}
+
+// attrsWithoutClass writes id and the attrs other than class, in attrs'
+// order, for a node whose classes the caller has already written.
+func (r *renderer) attrsWithoutClass(n *Node) {
+	if n.ID != "" {
+		r.w(" id=\"")
+		r.attrEsc(n.ID)
+		r.w("\"")
+	}
+	for _, a := range n.Attrs {
+		if a.Key != "class" {
+			r.attrList([]Attr{a})
+		}
 	}
 }
 

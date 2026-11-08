@@ -60,3 +60,27 @@ func TestTightListReachesNestedParagraphs(t *testing.T) {
 		})
 	}
 }
+
+// A task list's own class comes first and the node's classes join it in
+// one class attribute (grid.test L770); the id and other attributes follow.
+func TestTaskListMergesClass(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"grid.test L770", "{.x}\n- [x] done\n- [ ] todo\n",
+			"<ul class=\"task-list x\">\n<li>\n<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\ndone\n</li>\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\ntodo\n</li>\n</ul>\n"},
+		{"id-and-attr", "{#i .x .y k=v}\n- [ ] a\n",
+			"<ul class=\"task-list x y\" id=\"i\" k=\"v\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\na\n</li>\n</ul>\n"},
+		{"no-class", "{#i}\n- [ ] a\n",
+			"<ul class=\"task-list\" id=\"i\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\na\n</li>\n</ul>\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}
