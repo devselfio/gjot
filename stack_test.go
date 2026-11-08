@@ -123,37 +123,40 @@ func TestStackUnits(t *testing.T) {
 
 	// Each case is a corpus case's input and expected HTML, verbatim. A case
 	// with a renderer reason fails today for that reason only, outside the
-	// block parser: its mismatch is logged, and a match fails so the mark is
+	// block parser: it must give exactly today's HTML, which is the corpus's
+	// but for that reason, so any other difference fails. Its mismatch with
+	// the corpus is logged, and a match with the corpus fails so the mark is
 	// dropped.
 	html := []struct {
 		name, from, input, want string
-		renderer                string
+		renderer, today         string
 	}{
 		{"attributes-complete-on-one-line", "attributes.test L146",
 			"{#id}\n{key=val}\n{.foo .bar}\n{key=val2}\n{.baz}\n{#id2}\nOkay\n",
-			"<p id=\"id2\" key=\"val2\" class=\"foo bar baz\">Okay</p>\n", ""},
+			"<p id=\"id2\" key=\"val2\" class=\"foo bar baz\">Okay</p>\n", "", ""},
 		{"attributes-continued-over-indented-lines", "attributes.test L124",
 			"{#id .class\n  style=\"color:red\"}\nA paragraph\n",
-			"<p id=\"id\" class=\"class\" style=\"color:red\">A paragraph</p>\n", ""},
+			"<p id=\"id\" class=\"class\" style=\"color:red\">A paragraph</p>\n", "", ""},
 		{"attributes-failed-become-a-paragraph", "zjot.test L5797",
 			"{.a\n.b}\npara\n",
-			"<p>{.a\n.b}\npara</p>\n", ""},
+			"<p>{.a\n.b}\npara</p>\n", "", ""},
 		{"attributes-failed-alone-in-a-paragraph", "zjot.test L5829",
 			"{.a\n.b}\n\npara\n",
-			"<p>{.a\n.b}</p>\n<p>para</p>\n", ""},
+			"<p>{.a\n.b}</p>\n<p>para</p>\n", "", ""},
 		{"ids-where-they-stand", "zjot.test L206",
 			"# Foo bar\n\n{#Foo-bar}\nParagraph\n",
-			"<section id=\"Foo-bar\">\n<h1>Foo bar</h1>\n<p id=\"Foo-bar\">Paragraph</p>\n</section>\n", ""},
+			"<section id=\"Foo-bar\">\n<h1>Foo bar</h1>\n<p id=\"Foo-bar\">Paragraph</p>\n</section>\n", "", ""},
 		{"lists-attribute-after-item-is-the-next-paragraphs", "zjot.test L1528",
 			"- item\n{.c}\npara\n",
-			"<ul>\n<li>\nitem\n</li>\n</ul>\n<p class=\"c\">para</p>\n", ""},
+			"<ul>\n<li>\nitem\n</li>\n</ul>\n<p class=\"c\">para</p>\n", "", ""},
 		{"lists-blank-in-item-before-block-quote", "zjot.test L2506",
 			"- a\n\n  - b\n\n  > q\n",
 			"<ul>\n<li>\na\n<ul>\n<li>\nb\n</li>\n</ul>\n<blockquote>\nq\n</blockquote>\n</li>\n</ul>\n",
-			"html.go drops <p> only for a tight item's own paragraphs, not for one in a block quote inside it; the tree is checked by lists-blank-in-item-before-block-quote-tree"},
+			"html.go drops <p> only for a tight item's own paragraphs, not for one in a block quote inside it; the tree is checked by lists-blank-in-item-before-block-quote-tree",
+			"<ul>\n<li>\na\n<ul>\n<li>\nb\n</li>\n</ul>\n<blockquote>\n<p>q</p>\n</blockquote>\n</li>\n</ul>\n"},
 		{"lists-lazy-text-through-nested-divs", "zjot.test L6843",
 			"- ::: a\n  ::: b\n  x\n  :::\n  y\n  :::\nlazy\n",
-			"<ul>\n<li>\n<div class=\"a\">\n<div class=\"b\">\n<p>x</p>\n</div>\n</div>\n<p>y\n:::\nlazy</p>\n</li>\n</ul>\n", ""},
+			"<ul>\n<li>\n<div class=\"a\">\n<div class=\"b\">\n<p>x</p>\n</div>\n</div>\n<p>y\n:::\nlazy</p>\n</li>\n</ul>\n", "", ""},
 	}
 	for _, c := range html {
 		t.Run(c.name, func(t *testing.T) {
@@ -164,6 +167,8 @@ func TestStackUnits(t *testing.T) {
 			switch {
 			case c.renderer != "" && string(got) == c.want:
 				t.Errorf("%s now passes: drop its renderer reason", c.from)
+			case c.renderer != "" && string(got) != c.today:
+				t.Errorf("%s differs from today's HTML, so not only for its renderer reason (%s)\n---input---\n%s---today---\n%s---got---\n%s", c.from, c.renderer, c.input, c.today, got)
 			case c.renderer != "":
 				t.Logf("%s differs outside the block parser: %s\n---want---\n%s---got---\n%s", c.from, c.renderer, c.want, got)
 			case string(got) != c.want:
