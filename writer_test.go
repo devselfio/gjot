@@ -86,3 +86,27 @@ func TestWriterRestoresReferenceDefinitions(t *testing.T) {
 		t.Errorf("ast\n got %s\nwant %s", got, want)
 	}
 }
+
+func TestWriterApostrophe(t *testing.T) {
+	src := "# Don't panic\n"
+	want, err := HTML(Parse([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	djot, got := roundTrip(t, src)
+	if djot != src {
+		t.Errorf("%q written as %q", src, djot)
+	}
+	if got != string(want) {
+		t.Errorf("%q\n---want---\n%s---got---\n%s", src, want, got)
+	}
+	for _, src := range []string{"{'don't'}\n", "'tis and don't\n"} {
+		want, err := HTML(Parse([]byte(src)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if djot, got := roundTrip(t, src); got != string(want) {
+			t.Errorf("%q\n---written---\n%s---want---\n%s---got---\n%s", src, djot, want, got)
+		}
+	}
+}

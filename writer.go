@@ -504,7 +504,11 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		if w.prevDash && strings.HasPrefix(n.Text, "-") {
 			w.write("{}")
 		}
-		w.write(escapeText(n.Text, w.lineStart, next))
+		text := escapeText(n.Text, w.lineStart, next)
+		if w.open['\''] == 0 {
+			text = apostrophes(text, w.prev())
+		}
+		w.write(text)
 	case SoftBreak:
 		w.write("\n")
 	case HardBreak:
@@ -690,4 +694,39 @@ func escapeText(text string, lineStart bool, next *Node) string {
 		b.WriteByte(c)
 	}
 	return b.String()
+}
+
+// apostrophes writes each ’ that follows a letter or digit in escaped text as
+// the ' it was parsed from, so it reads back with that source (a heading id
+// reads "Don't", not "Don’t"); prev is the byte written before text. Such a
+// ' cannot open (the byte before is alphanumeric) and finds no plain ' to
+// close: text ' is always escaped, and the caller applies this only when no
+// SingleQuoted is being written. escapeText never escapes an alphanumeric
+// byte, so the byte before ’ in its output is the one in the text.
+func apostrophes(text string, prev byte) string {
+	const glyph = "’"
+	if !strings.Contains(text, glyph) {
+		return text
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(text, glyph)
+		if i < 0 {
+			b.WriteString(text)
+			return b.String()
+		}
+		if i > 0 {
+			prev = text[i-1]
+		}
+		b.WriteString(text[:i])
+		if isAlphanumeric(prev) {
+			b.WriteByte('\'')
+		} else {
+			b.WriteString(glyph)
+		}
+		// The byte before the next ’ is in the rest of text, or is what
+		// was just written, ' or ’, neither alphanumeric.
+		prev = 0
+		text = text[i+len(glyph):]
+	}
 }

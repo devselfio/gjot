@@ -177,13 +177,11 @@ zjot.test L9275
 zjot.test L9283
 zjot.test L9325
 zjot.test L9333
-zjot.test L9352
 zjot.test L9395
 zjot.test L9420
 zjot.test L9448
 zjot.test L9477
 zjot.test L9488
-zjot.test L9511
 zjot.test L9621
 zjot.test L9632
 zjot.test L9644
