@@ -3,11 +3,11 @@ package gjot
 import "strings"
 
 func (p *parser) tryTable() *Node {
-	if !isTableRow(p.lines[p.pos]) {
+	if !winIsTableRow(p.lines[p.pos]) {
 		return nil
 	}
 	var rawRows []string
-	for p.pos < len(p.lines) && isTableRow(p.lines[p.pos]) {
+	for p.pos < len(p.lines) && winIsTableRow(p.lines[p.pos]) {
 		rawRows = append(rawRows, p.lines[p.pos])
 		p.pos++
 	}
@@ -17,9 +17,9 @@ func (p *parser) tryTable() *Node {
 	isSep := make([]bool, len(rawRows))
 	aligns := make([][]CellAlign, len(rawRows))
 	for i, r := range rawRows {
-		if isTableSep(r) {
+		if winIsTableSep(r) {
 			isSep[i] = true
-			aligns[i] = parseSepAligns(r)
+			aligns[i] = winParseSepAligns(r)
 		}
 	}
 
@@ -42,7 +42,7 @@ func (p *parser) tryTable() *Node {
 	var capLines []string
 	for {
 		look := p.pos
-		for look < len(p.lines) && isBlank(p.lines[look]) {
+		for look < len(p.lines) && winIsBlank(p.lines[look]) {
 			look++
 		}
 		if look >= len(p.lines) {
@@ -54,7 +54,7 @@ func (p *parser) tryTable() *Node {
 		}
 		p.pos = look + 1
 		capLines = []string{strings.Trim(t[2:], " \t")}
-		for p.pos < len(p.lines) && !isBlank(p.lines[p.pos]) && !isTableRow(p.lines[p.pos]) {
+		for p.pos < len(p.lines) && !winIsBlank(p.lines[p.pos]) && !winIsTableRow(p.lines[p.pos]) {
 			capLines = append(capLines, strings.Trim(p.lines[p.pos], " \t"))
 			p.pos++
 		}
@@ -101,9 +101,9 @@ func skipBacktickSpan(text string, start int) int {
 	return len(text)
 }
 
-// isTableRow: starts with a pipe and has at least two pipes outside escapes
+// winIsTableRow: starts with a pipe and has at least two pipes outside escapes
 // and backtick spans.
-func isTableRow(line string) bool {
+func winIsTableRow(line string) bool {
 	trimmed := strings.Trim(line, " \t")
 	if trimmed == "" || trimmed[0] != '|' {
 		return false
@@ -125,12 +125,12 @@ func isTableRow(line string) bool {
 	return pipes >= 2
 }
 
-func isTableSep(line string) bool {
+func winIsTableSep(line string) bool {
 	trimmed := strings.Trim(line, " \t|")
 	return trimmed != "" && strings.Trim(trimmed, "-:| ") == ""
 }
 
-func parseSepAligns(line string) []CellAlign {
+func winParseSepAligns(line string) []CellAlign {
 	content := strings.Trim(line, " \t")
 	content = strings.TrimPrefix(content, "|")
 	content = strings.TrimSuffix(content, "|")

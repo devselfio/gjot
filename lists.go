@@ -31,15 +31,15 @@ func (p *parser) collectItemContent(contentCol, listIndent int, firstRest string
 
 	for p.pos < len(p.lines) && !c.sawBlank {
 		next := p.lines[p.pos]
-		if isBlank(next) {
+		if winIsBlank(next) {
 			c.sawBlank = true
 			p.pos++
 			continue
 		}
-		if m := parseBulletMarker(next); m != nil && m.indent <= listIndent {
+		if m := winParseBulletMarker(next); m != nil && m.indent <= listIndent {
 			break
 		}
-		if m := parseOrderedMarker(next); m != nil && m.indent <= listIndent {
+		if m := winParseOrderedMarker(next); m != nil && m.indent <= listIndent {
 			break
 		}
 		addPara(stripIndent(next, contentCol))
@@ -49,7 +49,7 @@ func (p *parser) collectItemContent(contentCol, listIndent int, firstRest string
 	lastWasBlank := true
 	for p.pos < len(p.lines) && c.sawBlank {
 		next := p.lines[p.pos]
-		if isBlank(next) {
+		if winIsBlank(next) {
 			addBlock("", 0)
 			p.pos++
 			lastWasBlank = true
@@ -58,7 +58,7 @@ func (p *parser) collectItemContent(contentCol, listIndent int, firstRest string
 		nextIndent := indentCols(next)
 		if nextIndent > listIndent {
 			strip := contentCol
-			if parseBulletMarker(next) != nil || parseOrderedMarker(next) != nil {
+			if winParseBulletMarker(next) != nil || winParseOrderedMarker(next) != nil {
 				strip = listIndent + 1
 			}
 			addBlock(stripIndent(next, strip))
@@ -76,7 +76,7 @@ func (p *parser) collectItemContent(contentCol, listIndent int, firstRest string
 		break
 	}
 
-	for len(c.blockLines) > 0 && isBlank(c.blockLines[len(c.blockLines)-1]) {
+	for len(c.blockLines) > 0 && winIsBlank(c.blockLines[len(c.blockLines)-1]) {
 		c.blockLines = c.blockLines[:len(c.blockLines)-1]
 		c.blockOrigins = c.blockOrigins[:len(c.blockOrigins)-1]
 	}
@@ -133,7 +133,7 @@ func (p *parser) listRange(startLine, listIndent int) *Range {
 }
 
 func (p *parser) tryBulletList() *Node {
-	first := parseBulletMarker(p.lines[p.pos])
+	first := winParseBulletMarker(p.lines[p.pos])
 	if first == nil {
 		return nil
 	}
@@ -142,7 +142,7 @@ func (p *parser) tryBulletList() *Node {
 	var items []*Node
 	tight, sawBlankBetween, hasTask := true, false, false
 	for p.pos < len(p.lines) {
-		cur := parseBulletMarker(p.lines[p.pos])
+		cur := winParseBulletMarker(p.lines[p.pos])
 		if cur == nil || cur.indent != listIndent || cur.marker != marker {
 			break
 		}
@@ -178,7 +178,7 @@ func (p *parser) tryBulletList() *Node {
 }
 
 func (p *parser) tryOrderedList() *Node {
-	first := parseOrderedMarker(p.lines[p.pos])
+	first := winParseOrderedMarker(p.lines[p.pos])
 	if first == nil {
 		return nil
 	}
@@ -188,7 +188,7 @@ func (p *parser) tryOrderedList() *Node {
 	var items []*Node
 	tight, sawBlankBetween := true, false
 	for p.pos < len(p.lines) {
-		cur := parseOrderedMarker(p.lines[p.pos])
+		cur := winParseOrderedMarker(p.lines[p.pos])
 		if cur == nil || cur.indent != listIndent {
 			break
 		}
@@ -218,7 +218,7 @@ func (p *parser) tryOrderedList() *Node {
 
 	style := possible[0]
 	var attrs []Attr
-	if start := getListStart(first.markerText, style); start != 1 {
+	if start := winGetListStart(first.markerText, style); start != 1 {
 		attrs = append(attrs, Attr{"start", strconv.Itoa(start)})
 	}
 	if t := style.htmlType(); t != "" {
@@ -227,8 +227,8 @@ func (p *parser) tryOrderedList() *Node {
 	return &Node{Tag: OrderedList, Children: items, Tight: tight, Attrs: attrs, Pos: p.listRange(listStart, listIndent)}
 }
 
-func intersectStyles(possible, cur []listStyle) []listStyle {
-	var common []listStyle
+func intersectStyles(possible, cur []winListStyle) []winListStyle {
+	var common []winListStyle
 	for _, ps := range possible {
 		for _, cs := range cur {
 			if cs == ps {
@@ -269,9 +269,9 @@ func (p *parser) tryDefinitionList() *Node {
 
 		for p.pos < len(p.lines) {
 			next := p.lines[p.pos]
-			if isBlank(next) {
+			if winIsBlank(next) {
 				first := p.pos
-				for p.pos < len(p.lines) && isBlank(p.lines[p.pos]) {
+				for p.pos < len(p.lines) && winIsBlank(p.lines[p.pos]) {
 					p.pos++
 				}
 				if p.pos >= len(p.lines) || indentCols(p.lines[p.pos]) < contentIndent {
@@ -318,7 +318,7 @@ type bulletInfo struct {
 	marker     byte
 }
 
-func parseBulletMarker(line string) *bulletInfo {
+func winParseBulletMarker(line string) *bulletInfo {
 	indent := indentCols(line)
 	trimmed := strings.TrimLeft(line, " \t")
 	if len(trimmed) < 2 || (trimmed[0] != '-' && trimmed[0] != '+' && trimmed[0] != '*') {
@@ -327,31 +327,31 @@ func parseBulletMarker(line string) *bulletInfo {
 	if trimmed[1] != ' ' && trimmed[1] != '\t' {
 		return nil
 	}
-	if trimmed[0] != '+' && isThematicBreak(line) {
+	if trimmed[0] != '+' && winIsThematicBreak(line) {
 		return nil
 	}
 	return &bulletInfo{rest: trimmed[2:], indent: indent, contentCol: indent + 2, marker: trimmed[0]}
 }
 
-type listStyle int
+type winListStyle int
 
 const (
-	styleDecimal listStyle = iota
-	styleLowerAlpha
-	styleUpperAlpha
-	styleLowerRoman
-	styleUpperRoman
+	winStyleDecimal winListStyle = iota
+	winStyleLowerAlpha
+	winStyleUpperAlpha
+	winStyleLowerRoman
+	winStyleUpperRoman
 )
 
-func (s listStyle) htmlType() string {
+func (s winListStyle) htmlType() string {
 	switch s {
-	case styleLowerAlpha:
+	case winStyleLowerAlpha:
 		return "a"
-	case styleUpperAlpha:
+	case winStyleUpperAlpha:
 		return "A"
-	case styleLowerRoman:
+	case winStyleLowerRoman:
 		return "i"
-	case styleUpperRoman:
+	case winStyleUpperRoman:
 		return "I"
 	}
 	return ""
@@ -361,11 +361,11 @@ type orderedInfo struct {
 	rest       string
 	indent     int
 	contentCol int
-	styles     []listStyle // candidate styles; a single letter may be alpha or roman
+	styles     []winListStyle // candidate styles; a single letter may be alpha or roman
 	markerText string
 }
 
-func parseOrderedMarker(line string) *orderedInfo {
+func winParseOrderedMarker(line string) *orderedInfo {
 	indent := indentCols(line)
 	trimmed := strings.TrimLeft(line, " \t")
 	if len(trimmed) < 2 {
@@ -392,7 +392,7 @@ func parseOrderedMarker(line string) *orderedInfo {
 		digits++
 	}
 	if digits > 0 && digits < len(after) && delimOK(after[digits]) {
-		return finishMarker(trimmed, indent, start+digits+1, []listStyle{styleDecimal}, after[:digits])
+		return finishMarker(trimmed, indent, start+digits+1, []winListStyle{winStyleDecimal}, after[:digits])
 	}
 	if len(after) < 2 {
 		return nil
@@ -400,23 +400,23 @@ func parseOrderedMarker(line string) *orderedInfo {
 
 	c := after[0]
 	if c >= 'a' && c <= 'z' && delimOK(after[1]) {
-		styles := []listStyle{styleLowerAlpha}
+		styles := []winListStyle{winStyleLowerAlpha}
 		if isRomanLower(c) {
-			styles = []listStyle{styleLowerRoman, styleLowerAlpha}
+			styles = []winListStyle{winStyleLowerRoman, winStyleLowerAlpha}
 		}
 		return finishMarker(trimmed, indent, start+2, styles, after[:1])
 	}
 	if c >= 'A' && c <= 'Z' && delimOK(after[1]) {
-		styles := []listStyle{styleUpperAlpha}
+		styles := []winListStyle{winStyleUpperAlpha}
 		if isRomanUpper(c) {
-			styles = []listStyle{styleUpperRoman, styleUpperAlpha}
+			styles = []winListStyle{winStyleUpperRoman, winStyleUpperAlpha}
 		}
 		return finishMarker(trimmed, indent, start+2, styles, after[:1])
 	}
 	for _, roman := range []struct {
 		is    func(byte) bool
-		style listStyle
-	}{{isRomanLower, styleLowerRoman}, {isRomanUpper, styleUpperRoman}} {
+		style winListStyle
+	}{{isRomanLower, winStyleLowerRoman}, {isRomanUpper, winStyleUpperRoman}} {
 		if !roman.is(c) {
 			continue
 		}
@@ -425,13 +425,13 @@ func parseOrderedMarker(line string) *orderedInfo {
 			j++
 		}
 		if j > 1 && j < len(after) && delimOK(after[j]) {
-			return finishMarker(trimmed, indent, start+j+1, []listStyle{roman.style}, after[:j])
+			return finishMarker(trimmed, indent, start+j+1, []winListStyle{roman.style}, after[:j])
 		}
 	}
 	return nil
 }
 
-func finishMarker(trimmed string, indent, markerLen int, styles []listStyle, markerText string) *orderedInfo {
+func finishMarker(trimmed string, indent, markerLen int, styles []winListStyle, markerText string) *orderedInfo {
 	info := &orderedInfo{indent: indent, contentCol: indent + markerLen + 1, styles: styles, markerText: markerText}
 	if markerLen >= len(trimmed) {
 		return info
@@ -443,23 +443,23 @@ func finishMarker(trimmed string, indent, markerLen int, styles []listStyle, mar
 	return info
 }
 
-func getListStart(markerText string, style listStyle) int {
+func winGetListStart(markerText string, style winListStyle) int {
 	switch style {
-	case styleDecimal:
+	case winStyleDecimal:
 		n, err := strconv.Atoi(markerText)
 		if err != nil {
 			return 1
 		}
 		return n
-	case styleLowerAlpha:
+	case winStyleLowerAlpha:
 		if len(markerText) == 1 {
 			return int(markerText[0]-'a') + 1
 		}
-	case styleUpperAlpha:
+	case winStyleUpperAlpha:
 		if len(markerText) == 1 {
 			return int(markerText[0]-'A') + 1
 		}
-	case styleLowerRoman, styleUpperRoman:
+	case winStyleLowerRoman, winStyleUpperRoman:
 		return romanToNumber(markerText)
 	}
 	return 1

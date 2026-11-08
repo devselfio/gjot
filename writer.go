@@ -208,7 +208,7 @@ func (d *djotWriter) item(blocks []*Node, first, rest string) []string {
 func fenceLength(lines []string, char byte) int {
 	n := 3
 	for _, l := range lines {
-		if run := countLeadingChar(strings.TrimLeft(l, " "), char); run >= n {
+		if run := winCountLeadingChar(strings.TrimLeft(l, " "), char); run >= n {
 			n = run + 1
 		}
 	}
@@ -653,7 +653,7 @@ func escapeText(text string, lineStart bool, next *Node) string {
 	var b strings.Builder
 	markerDelim := -1
 	if lineStart {
-		if m := parseOrderedMarker(text); m != nil {
+		if m := winParseOrderedMarker(text); m != nil {
 			markerDelim = m.contentCol - 2 // the "." or ")" that ends the marker
 		}
 	}

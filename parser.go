@@ -146,7 +146,7 @@ func (p *parser) parseBlocksUntil(endMarker string) []*Node {
 	var pending *blockAttrs
 	for p.pos < len(p.lines) {
 		line := p.lines[p.pos]
-		if isBlank(line) {
+		if winIsBlank(line) {
 			p.pos++
 			pending = nil
 			continue
@@ -206,7 +206,7 @@ func (p *parser) tryBlockAttr() (blockAttrs, bool) {
 	consumed := 1
 	for p.pos+consumed < len(p.lines) {
 		next := p.lines[p.pos+consumed]
-		if isBlank(next) || indentCols(next) <= indent {
+		if winIsBlank(next) || indentCols(next) <= indent {
 			break
 		}
 		full += "\n" + strings.Trim(next, " \t")
@@ -224,7 +224,7 @@ func (p *parser) isClosingFence(line string) bool {
 		return false
 	}
 	trimmed := strings.TrimLeft(line, " \t")
-	return countLeadingChar(trimmed, ':') >= len(p.endMarker) && isBlank(strings.TrimLeft(trimmed, ":"))
+	return winCountLeadingChar(trimmed, ':') >= len(p.endMarker) && winIsBlank(strings.TrimLeft(trimmed, ":"))
 }
 
 func (p *parser) parseParagraph() *Node {
@@ -232,7 +232,7 @@ func (p *parser) parseParagraph() *Node {
 	var textLines []string
 	for p.pos < len(p.lines) {
 		line := p.lines[p.pos]
-		if isBlank(line) || p.isClosingFence(line) {
+		if winIsBlank(line) || p.isClosingFence(line) {
 			break
 		}
 		textLines = append(textLines, strings.TrimLeft(line, " \t"))
@@ -275,7 +275,7 @@ func (p *parser) buildInlineLineMap(textLines []string, startLine int) lineMap {
 func (p *parser) tryHeading() *Node {
 	line := p.lines[p.pos]
 	trimmed := strings.TrimLeft(line, " \t")
-	hashes := countLeadingChar(trimmed, '#')
+	hashes := winCountLeadingChar(trimmed, '#')
 	if hashes == 0 || hashes > 6 {
 		return nil
 	}
@@ -290,16 +290,16 @@ func (p *parser) tryHeading() *Node {
 	}
 	for p.pos < len(p.lines) {
 		next := p.lines[p.pos]
-		if isBlank(next) || isThematicBreak(next) || isCodeFence(next) != nil ||
-			startsBlockQuote(next) || isFencedDivStart(next) != nil ||
-			parseBulletMarker(next) != nil || parseOrderedMarker(next) != nil {
+		if winIsBlank(next) || winIsThematicBreak(next) || winIsCodeFence(next) != nil ||
+			winStartsBlockQuote(next) || winIsFencedDivStart(next) != nil ||
+			winParseBulletMarker(next) != nil || winParseOrderedMarker(next) != nil {
 			break
 		}
 		if _, ok := tryParseBlockAttr(next); ok {
 			break
 		}
 		nextTrimmed := strings.TrimLeft(next, " \t")
-		nextHashes := countLeadingChar(nextTrimmed, '#')
+		nextHashes := winCountLeadingChar(nextTrimmed, '#')
 		hashFollowedBySpace := nextHashes < len(nextTrimmed) && (nextTrimmed[nextHashes] == ' ' || nextTrimmed[nextHashes] == '\t')
 		switch {
 		case nextHashes == hashes && hashFollowedBySpace:
@@ -342,7 +342,7 @@ func headingIDText(src string, inlines []*Node) string {
 }
 
 func (p *parser) tryThematicBreak() *Node {
-	if !isThematicBreak(p.lines[p.pos]) {
+	if !winIsThematicBreak(p.lines[p.pos]) {
 		return nil
 	}
 	p.pos++
@@ -350,7 +350,7 @@ func (p *parser) tryThematicBreak() *Node {
 }
 
 func (p *parser) tryCodeBlock() *Node {
-	fence := isCodeFence(p.lines[p.pos])
+	fence := winIsCodeFence(p.lines[p.pos])
 	if fence == nil {
 		return nil
 	}
@@ -375,22 +375,22 @@ func (p *parser) tryCodeBlock() *Node {
 }
 
 func (p *parser) tryBlockQuote() *Node {
-	if !startsBlockQuote(p.lines[p.pos]) {
+	if !winStartsBlockQuote(p.lines[p.pos]) {
 		return nil
 	}
 	start := p.pos
 	var inner []string
 	var origins []lineOrigin
-	var openFence *fenceInfo
+	var openFence *winFenceInfo
 	lazyOK := false // the last inner line is text a lazy line may continue
 	for p.pos < len(p.lines) {
 		l := p.lines[p.pos]
 		content, stripped := l, 0
 		switch {
-		case startsBlockQuote(l):
+		case winStartsBlockQuote(l):
 			content = stripBlockQuotePrefix(l)
 			stripped = len(l) - len(content)
-		case lazyOK && !isBlank(l) && !p.isClosingFence(l):
+		case lazyOK && !winIsBlank(l) && !p.isClosingFence(l):
 		default:
 			return p.blockQuote(inner, origins)
 		}
@@ -405,11 +405,11 @@ func (p *parser) tryBlockQuote() *Node {
 				openFence = nil
 			}
 			lazyOK = false
-		case isCodeFence(content) != nil:
-			openFence = isCodeFence(content)
+		case winIsCodeFence(content) != nil:
+			openFence = winIsCodeFence(content)
 			lazyOK = false
 		default:
-			lazyOK = !isBlank(content) && !isThematicBreak(content) && isFencedDivStart(content) == nil
+			lazyOK = !winIsBlank(content) && !winIsThematicBreak(content) && winIsFencedDivStart(content) == nil
 		}
 	}
 	return p.blockQuote(inner, origins)
@@ -420,7 +420,7 @@ func (p *parser) blockQuote(inner []string, origins []lineOrigin) *Node {
 }
 
 func (p *parser) tryFencedDiv() *Node {
-	div := isFencedDivStart(p.lines[p.pos])
+	div := winIsFencedDivStart(p.lines[p.pos])
 	if div == nil {
 		return nil
 	}
@@ -451,7 +451,7 @@ func (p *parser) tryRefDef(pending *blockAttrs) bool {
 	}
 	for p.pos < len(p.lines) {
 		next := p.lines[p.pos]
-		if isBlank(next) || (next[0] != ' ' && next[0] != '\t') {
+		if winIsBlank(next) || (next[0] != ' ' && next[0] != '\t') {
 			break
 		}
 		if strings.HasPrefix(strings.TrimLeft(next, " \t"), "[") {
@@ -491,9 +491,9 @@ func (p *parser) tryFootnoteDef() bool {
 	for p.pos < len(p.lines) {
 		l := p.lines[p.pos]
 		switch {
-		case isBlank(l):
+		case winIsBlank(l):
 			look := p.pos + 1
-			for look < len(p.lines) && isBlank(p.lines[look]) {
+			for look < len(p.lines) && winIsBlank(p.lines[look]) {
 				look++
 			}
 			if look < len(p.lines) && (p.lines[look][0] == ' ' || p.lines[look][0] == '\t') {
@@ -711,7 +711,7 @@ func (p *parser) buildFootnoteSection() *Node {
 
 // --- Line classification ---
 
-func isBlank(line string) bool {
+func winIsBlank(line string) bool {
 	return strings.Trim(line, " \t\r") == ""
 }
 
@@ -723,7 +723,7 @@ func isNewBlockStart(line string) bool {
 	if trimmed[0] == '#' || trimmed[0] == '>' {
 		return true
 	}
-	if isCodeFence(line) != nil || parseBulletMarker(line) != nil || parseOrderedMarker(line) != nil || isThematicBreak(trimmed) {
+	if winIsCodeFence(line) != nil || winParseBulletMarker(line) != nil || winParseOrderedMarker(line) != nil || winIsThematicBreak(trimmed) {
 		return true
 	}
 	return trimmed[0] == ':' && len(trimmed) > 1 && (trimmed[1] == ' ' || trimmed[1] == '\t')
@@ -764,7 +764,7 @@ func stripIndent(line string, cols int) (string, int) {
 	return line[i:], i
 }
 
-func countLeadingChar(line string, char byte) int {
+func winCountLeadingChar(line string, char byte) int {
 	for i := 0; i < len(line); i++ {
 		if line[i] != char {
 			return i
@@ -773,7 +773,7 @@ func countLeadingChar(line string, char byte) int {
 	return len(line)
 }
 
-func isThematicBreak(line string) bool {
+func winIsThematicBreak(line string) bool {
 	trimmed := strings.Trim(line, " \t")
 	if len(trimmed) < 3 {
 		return false
@@ -791,7 +791,7 @@ func isThematicBreak(line string) bool {
 	return count >= 3
 }
 
-type fenceInfo struct {
+type winFenceInfo struct {
 	length int
 	char   byte
 	lang   string
@@ -799,20 +799,20 @@ type fenceInfo struct {
 }
 
 // closesCodeFence reports whether line closes the block opened by fence.
-func closesCodeFence(line string, fence *fenceInfo) bool {
+func closesCodeFence(line string, fence *winFenceInfo) bool {
 	unindented := strings.TrimLeft(line, " \t")
-	run := countLeadingChar(unindented, fence.char)
-	return run >= fence.length && isBlank(strings.TrimLeft(unindented[run:], string(rune(fence.char))))
+	run := winCountLeadingChar(unindented, fence.char)
+	return run >= fence.length && winIsBlank(strings.TrimLeft(unindented[run:], string(rune(fence.char))))
 }
 
-func isCodeFence(line string) *fenceInfo {
+func winIsCodeFence(line string) *winFenceInfo {
 	indent := indentCols(line)
 	rest := strings.TrimLeft(line, " \t")
 	if len(rest) < 3 || (rest[0] != '`' && rest[0] != '~') {
 		return nil
 	}
 	char := rest[0]
-	length := countLeadingChar(rest, char)
+	length := winCountLeadingChar(rest, char)
 	if length < 3 {
 		return nil
 	}
@@ -833,10 +833,10 @@ func isCodeFence(line string) *fenceInfo {
 			}
 		}
 	}
-	return &fenceInfo{length: length, char: char, lang: after, indent: indent}
+	return &winFenceInfo{length: length, char: char, lang: after, indent: indent}
 }
 
-func startsBlockQuote(line string) bool {
+func winStartsBlockQuote(line string) bool {
 	trimmed := strings.TrimLeft(line, " \t")
 	if trimmed == "" || trimmed[0] != '>' {
 		return false
@@ -859,16 +859,16 @@ func stripBlockQuotePrefix(line string) string {
 	return trimmed[1:]
 }
 
-type divInfo struct {
+type winDivInfo struct {
 	fence string
 	class string
 }
 
-func isFencedDivStart(line string) *divInfo {
+func winIsFencedDivStart(line string) *winDivInfo {
 	trimmed := strings.TrimLeft(line, " \t")
-	colons := countLeadingChar(trimmed, ':')
+	colons := winCountLeadingChar(trimmed, ':')
 	if colons < 3 {
 		return nil
 	}
-	return &divInfo{fence: trimmed[:colons], class: strings.Trim(trimmed[colons:], " \t")}
+	return &winDivInfo{fence: trimmed[:colons], class: strings.Trim(trimmed[colons:], " \t")}
 }
