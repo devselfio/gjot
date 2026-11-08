@@ -116,6 +116,7 @@ func TestLeafHeadingLevel(t *testing.T) {
 		want    int
 	}{
 		{"# a", 1}, {"### a", 3}, {"#\ta", 1}, {"#", 1}, {"##", 2}, {"# ", 1},
+		{"###### a", 6}, {"######", 6}, {"####### a", 0}, {"#######", 0}, {"########## a", 0},
 		{"#a", 0}, {"a #", 0}, {"", 0}, {"\\# a", 0},
 	} {
 		if got := headingLevel(tc.trimmed); got != tc.want {

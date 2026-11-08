@@ -95,10 +95,11 @@ func isClosingCodeFence(line string, f fenceInfo) bool {
 
 // headingLevel is the number of '#' that open a heading in a line whose
 // indent is already skipped, or 0 when the line opens no heading. The run
-// must end the line or be followed by a space or tab.
+// must end the line or be followed by a space or tab, and be at most six
+// long: a line of seven or more '#' is a paragraph (zjot.test L118).
 func headingLevel(trimmed string) int {
 	n := countLeadingChar(trimmed, '#')
-	if n == 0 {
+	if n == 0 || n > 6 {
 		return 0
 	}
 	if n < len(trimmed) && !isSpaceOrTab(trimmed[n]) && trimmed[n] != '\r' {
