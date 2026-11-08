@@ -39,6 +39,12 @@ type renderer struct {
 	out   []byte
 	hooks map[string]Hook
 	err   error
+	// tight is true while rendering the items of a tight bullet, ordered
+	// or task list, the innermost such list winning, and makes every
+	// paragraph below them render bare, however deep in block quotes,
+	// divs (hooked or not) and definitions. Only lists set it; a
+	// definition list inherits the enclosing list's.
+	tight bool
 }
 
 func (r *renderer) w(s string) { r.out = append(r.out, s...) }
@@ -103,6 +109,11 @@ func (r *renderer) render(n *Node) {
 			r.children(n)
 		}
 	case Para:
+		if r.tight {
+			r.children(n)
+			r.w("\n")
+			return
+		}
 		r.w("<p")
 		r.attrs(n)
 		r.w(">")
@@ -150,19 +161,28 @@ func (r *renderer) render(n *Node) {
 		r.w("<ul")
 		r.attrs(n)
 		r.w(">\n")
+		old := r.tight
+		r.tight = n.Tight
 		r.listItems(n)
+		r.tight = old
 		r.w("</ul>\n")
 	case OrderedList:
 		r.w("<ol")
 		r.attrs(n)
 		r.w(">\n")
+		old := r.tight
+		r.tight = n.Tight
 		r.listItems(n)
+		r.tight = old
 		r.w("</ol>\n")
 	case TaskList:
 		r.w("<ul class=\"task-list\"")
 		r.attrs(n)
 		r.w(">\n")
+		old := r.tight
+		r.tight = n.Tight
 		r.listItems(n)
+		r.tight = old
 		r.w("</ul>\n")
 	case ListItem:
 		r.w("<li")
@@ -383,14 +403,7 @@ func (r *renderer) listItems(list *Node) {
 				r.w("<input disabled=\"\" type=\"checkbox\"/>\n")
 			}
 		}
-		for _, c := range item.Children {
-			if list.Tight && c.Tag == Para {
-				r.children(c)
-				r.w("\n")
-			} else {
-				r.render(c)
-			}
-		}
+		r.children(item)
 		r.w("</li>\n")
 	}
 }
