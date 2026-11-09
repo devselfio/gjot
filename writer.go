@@ -845,21 +845,30 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 				openerAt[c] = i + 1
 			}
 		case '{':
-			// A marked opener starts a node of its own when read back, so
+			inRun := text[i+1:]
+			// A marked opener {X starts a node of its own when read back, so
 			// where a node starts it needs no escape; its delimiter is
-			// written with it, not judged as a delimiter of its own.
-			marked := tail != "" && strings.IndexByte(markedDelims, tail[0]) >= 0
-			// Inside a marked pair of the same delimiter, a raw marked opener
-			// would take the pair's closer.
-			escape = escape && !marked || braceOpensMarkup(tail, len(text)-i-1) || marked && w.openMarked[tail[0]] > 0
-			if !escape && marked && i+1 < len(text) {
-				w.openMarked[tail[0]]++
-				b.WriteByte(c)
-				b.WriteByte(tail[0])
-				i++
-				markedEnd = i + 1
-				continue
+			// written with it, not judged as a delimiter of its own. Not
+			// when X starts a node of the run (the boundary is kept by
+			// escaping X), nor right after a verbatim, which takes {= as
+			// its raw format.
+			marked := inRun != "" && strings.IndexByte(markedDelims, inRun[0]) >= 0 && kinds[i+1] != kindStart &&
+				!(i == 0 && w.prev() == '`' && inRun[0] == '=')
+			if marked {
+				// Inside a marked pair of the same delimiter, a raw marked
+				// opener would take the pair's closer.
+				escape = braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
+				if !escape {
+					w.openMarked[inRun[0]]++
+					b.WriteByte(c)
+					b.WriteByte(inRun[0])
+					i++
+					markedEnd = i + 1
+					continue
+				}
+				break
 			}
+			escape = escape || braceOpensMarkup(tail, len(inRun)) || w.attrsCouldClose(tail, next)
 		case '}':
 			escape = escape || i != markedEnd && strings.IndexByte(markedDelims, prev) >= 0 && w.openMarked[prev] > 0
 		case '[':
@@ -877,7 +886,7 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 			_, _, ok := autolinkAt(text, i)
 			escape = escape || ok
 		case '$':
-			escape = escape || strings.HasPrefix(tail, "`") || strings.HasPrefix(tail, "$`")
+			escape = escape || strings.HasPrefix(tail, "`") || strings.HasPrefix(tail, "$`") || strings.HasPrefix(tail, "$$`")
 		case '-':
 			escape = escape || (w.lineStart && i == 0) || strings.HasPrefix(tail, "-") || prev == '-'
 		case '.':
@@ -980,7 +989,7 @@ func (w *inlineWriter) after(next *Node) string {
 	case InlineMath:
 		return "$`"
 	case DisplayMath:
-		return "$$"
+		return "$$`"
 	case Link, Span, FootnoteReference:
 		return "["
 	case Image:
@@ -1037,6 +1046,25 @@ func braceOpensMarkup(tail string, run int) bool {
 		return run == 0 || strings.Contains(tail[1:run], string(n)+"}")
 	}
 	_, _, ok := parseInlineAttrs("{"+tail, 0)
+	return ok
+}
+
+// attrsCouldClose reports whether a raw brace followed by tail (the rest
+// of its run and what follows the run) could read as an attribute closed
+// by a "}" written later (an attribute set, a braced pair, a kept
+// boundary): the attribute parses up to where tail ends, or a comment
+// opens, which takes anything. A brace before a node whose first bytes are
+// unknown is taken to. No "}" comes after a leaf's last run, unless it ends
+// in a space, which leafLines keeps with an empty attribute.
+func (w *inlineWriter) attrsCouldClose(tail string, next *Node) bool {
+	if next == nil && w.closer == "" && !strings.HasSuffix(tail, " ") {
+		return false
+	}
+	rest := strings.TrimLeft(tail, " \t\n")
+	if rest == "" || rest[0] == '%' {
+		return true
+	}
+	_, _, ok := parseInlineAttrs("{"+tail+"}", 0)
 	return ok
 }
 
