@@ -17,6 +17,13 @@ func TestParseAttrs(t *testing.T) {
 		{"bare value", `{k=v}`, blockAttrs{attrs: []Attr{{"k", "v"}}}, true},
 		{"quoted value with escape and newline", "{key=\"bar\na\\$bim\"}",
 			blockAttrs{attrs: []Attr{{"key", "bar a$bim"}}}, true},
+		// A backslash goes before djot.js's set of punctuation and stays
+		// before "<", "@" and a space; runs of spaces and line ends, an
+		// escaped line end included, are one space (zjot.test L9333, L9420).
+		{"quoted value escapes", `{k="x\,y\<z\@w\ v\\u\"q"}`,
+			blockAttrs{attrs: []Attr{{"k", `x,y\<z\@w\ v\u"q`}}}, true},
+		{"quoted value blanks collapse", "{k=\"x\\\ny  z \n w\"}",
+			blockAttrs{attrs: []Attr{{"k", "x\\ y z w"}}}, true},
 		{"comment only", `{%c%}`, blockAttrs{}, true},
 		{"incomplete", `{#id`, blockAttrs{}, false},
 		{"bad character", `{#id !}`, blockAttrs{}, false},

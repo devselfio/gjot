@@ -78,16 +78,6 @@ zjot.test L8948
 zjot.test L9026
 zjot.test L9045
 zjot.test L9059
-zjot.test L9201
-zjot.test L9208
-zjot.test L9215
-zjot.test L9222
-zjot.test L9231
-zjot.test L9239
-zjot.test L9275
-zjot.test L9283
-zjot.test L9333
-zjot.test L9420
 zjot.test L9844
 zjot.test L10034
 zjot.test L10061

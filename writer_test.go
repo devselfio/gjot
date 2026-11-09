@@ -91,6 +91,33 @@ func TestWriterRestoresReferenceDefinitions(t *testing.T) {
 	}
 }
 
+// A reference label is keyed with its escapes dropped, so the writer escapes
+// the bytes of the key that would read as an escape or a bracket; a
+// destination's blanks and punctuation need no escape, its backslash does;
+// an attribute value's backslash is escaped wherever it stands.
+func TestWriterEscapesLabelsAndDestinations(t *testing.T) {
+	for _, c := range []struct{ src, want string }{
+		{"[a][b\\]c]\n", "[a][b\\]c]\n"},
+		{"[a][b\\\\,c]\n", "[a][b\\\\,c]\n"},
+		{"[a][b\\\\ c]\n", "[a][b\\\\ c]\n"},
+		// A definition's label is keyed as written (djot.js), so the link's
+		// escaped backslash matches the definition's bare one.
+		{"[a][b\\\\c]\n\n[b\\c]: /u\n", "[a][b\\\\c]\n\n[b\\c]: /u\n"},
+		{"[a][b [c][d] e]\n", "[a][b \\[c\\]\\[d\\] e]\n"},
+		{"[a](u\\ v\\,w\\\\x)\n", "[a](u v,w\\\\x)\n"},
+		{"a{k=\"x\\ y\\\\z\"}\n", "[a]{k=\"x\\\\ y\\\\z\"}\n"},
+	} {
+		djot, _ := roundTrip(t, c.src)
+		if djot != c.want {
+			t.Errorf("%q written %q, want %q", c.src, djot, c.want)
+		}
+		want := string(ASTText(Parse([]byte(c.src))))
+		if got := string(ASTText(Parse([]byte(djot)))); got != want {
+			t.Errorf("%q round trip changed AST:\n---want---\n%s---got---\n%s", c.src, want, got)
+		}
+	}
+}
+
 func TestWriterApostrophe(t *testing.T) {
 	src := "# Don't panic\n"
 	want, err := HTML(Parse([]byte(src)))

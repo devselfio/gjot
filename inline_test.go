@@ -211,6 +211,30 @@ func TestNormalizeLabel(t *testing.T) {
 	}
 }
 
+// A backslash escapes any ASCII punctuation in text (zjot.test L9201), and
+// in a destination or a reference label also a space and a line end: the
+// line end goes with the blanks before it, as djot.js trims the text before
+// a hard break (zjot.test L9208-L9283).
+func TestInlineEscapes(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{"a\\,b \\&c \\/d \\;e \\?f \\@g\n", "<p>a,b &amp;c /d ;e ?f @g</p>\n"},
+		{"a\\qb\n", "<p>a\\qb</p>\n"},
+		{"[a](u\\,v)\n", "<p><a href=\"u,v\">a</a></p>\n"},
+		{"[a](u\\ v)\n", "<p><a href=\"u v\">a</a></p>\n"},
+		{"[a](u\\\nv)\n", "<p><a href=\"uv\">a</a></p>\n"},
+		{"[a](u\\\t\nv)\n", "<p><a href=\"u\tv\">a</a></p>\n"},
+		{"[a](u  \\\nv)\n", "<p><a href=\"uv\">a</a></p>\n"},
+		{"[a](u\\\\,v)\n", "<p><a href=\"u\\,v\">a</a></p>\n"},
+		{"[a][b\\ c]\n\n[b c]: /v\n", "<p><a href=\"/v\">a</a></p>\n"},
+		{"[a][b\\\nc]\n\n[b c]: /u\n", "<p><a href=\"/u\">a</a></p>\n"},
+		{"[a][b\\qc]\n\n[b\\qc]: /w\n", "<p><a href=\"/w\">a</a></p>\n"},
+	} {
+		if got := htmlOf(t, tt.src); got != tt.want {
+			t.Errorf("%q\n got %q\nwant %q", tt.src, got, tt.want)
+		}
+	}
+}
+
 // Markup that matches nothing is text in one node with the text around it,
 // as djot.js reports it (zjot.test L3051-L3543, L10478, L10658, L10669): an
 // unmatched delimiter, bracket, brace, dollar or angle bracket joins its

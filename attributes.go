@@ -327,10 +327,41 @@ func (p *attrParser) emitQuotedValue(pos int) {
 		raw = p.src[p.begin+1 : pos]
 	}
 	if p.haveKey {
-		p.attrs = append(p.attrs, Attr{p.currentKey, processAttrEscapes(raw)})
+		p.attrs = append(p.attrs, Attr{p.currentKey, processAttrEscapes(collapseBlanks(raw))})
 		p.haveKey = false
 	}
 	p.begin = -1
+}
+
+// collapseBlanks makes a quoted value's runs of spaces and line ends one
+// space (djot.js's `[ \r\n]+`); an escaped line end is among them, its
+// backslash left for processAttrEscapes.
+func collapseBlanks(raw string) string {
+	if !strings.ContainsAny(raw, "\r\n") && !strings.Contains(raw, "  ") {
+		return raw
+	}
+	buf := make([]byte, 0, len(raw))
+	inRun := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if c == ' ' || c == '\r' || c == '\n' {
+			if !inRun {
+				buf = append(buf, ' ')
+			}
+			inRun = true
+			continue
+		}
+		buf = append(buf, c)
+		inRun = false
+	}
+	return string(buf)
+}
+
+// attrEscapable reports whether a backslash before c goes in an attribute
+// value: djot.js's set, which lacks "<", ">", "@" and the space, so those
+// keep their backslash.
+func attrEscapable(c byte) bool {
+	return strings.IndexByte(".,\\/#!$%^&*;:{}=-_`~+[]()'\"?|", c) >= 0
 }
 
 func processAttrEscapes(raw string) string {
@@ -339,7 +370,7 @@ func processAttrEscapes(raw string) string {
 	}
 	buf := make([]byte, 0, len(raw))
 	for i := 0; i < len(raw); i++ {
-		if raw[i] == '\\' && i+1 < len(raw) {
+		if raw[i] == '\\' && i+1 < len(raw) && attrEscapable(raw[i+1]) {
 			i++
 		}
 		buf = append(buf, raw[i])

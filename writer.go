@@ -633,9 +633,9 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		w.write("]")
 		switch {
 		case n.Destination == nil:
-			w.write("[" + n.Reference + "]")
+			w.write("[" + label(n.Reference) + "]")
 		case n.Reference != "" && w.d.defineRef(normalizeLabel(n.Reference), *n.Destination):
-			w.write("[" + n.Reference + "]")
+			w.write("[" + label(n.Reference) + "]")
 		default:
 			w.write("(" + destination(*n.Destination) + ")")
 		}
@@ -726,12 +726,26 @@ func (w *inlineWriter) bracketed(children []*Node) {
 // attribute's brace, each of which could take the ")" with it. processUrl
 // drops the escapes when the destination is read back.
 func destination(url string) string {
+	return escapeBytes(url, "\\()[]<`{")
+}
+
+// label escapes the bytes of a reference label's key that the parser would
+// read as an escape or as a bracket (a "[" opens a bracket inside the label
+// and a "]" closes the nearest one, so an escaped "]" alone would leave its
+// "[" open); unescapeLabel drops the escapes when the label is read back. A
+// key is normalized, so it has no blanks an escape would need to keep.
+func label(key string) string {
+	return escapeBytes(key, "\\[]")
+}
+
+// escapeBytes writes a backslash before each byte of s that is in set.
+func escapeBytes(s, set string) string {
 	var b strings.Builder
-	for i := 0; i < len(url); i++ {
-		if strings.IndexByte("\\()[]<`{", url[i]) >= 0 {
+	for i := 0; i < len(s); i++ {
+		if strings.IndexByte(set, s[i]) >= 0 {
 			b.WriteByte('\\')
 		}
-		b.WriteByte(url[i])
+		b.WriteByte(s[i])
 	}
 	return b.String()
 }

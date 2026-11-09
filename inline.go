@@ -718,11 +718,11 @@ func (p *inlineParser) handleCloseBracket() {
 	next := pos + 1
 
 	if open := op.link; open != nil && open.reference {
-		// The label is stored normalized, as djot.js's AST prints it; a
-		// label of blanks only keeps its blanks, since "" would read as
-		// the text-as-label form [a][] (zjot.test L9266: [a][ ] resolves
-		// nothing).
-		ref := src[open.srcPos+2 : pos]
+		// The label is stored keyed as djot.js keys it (escapes dropped,
+		// then normalized), as its AST prints it; a label of blanks only
+		// keeps its blanks, since "" would read as the text-as-label form
+		// [a][] (zjot.test L9266: [a][ ] resolves nothing).
+		ref := unescapeLabel(src[open.srcPos+2 : pos])
 		if norm := normalizeLabel(ref); norm != "" {
 			ref = norm
 		}
@@ -1152,8 +1152,51 @@ func canCloseDelim(src string, pos int) bool {
 	return pos > 0 && !isInlineSpace(src[pos-1])
 }
 
+// isEscapable reports whether a backslash before c escapes it: any ASCII
+// punctuation (djot.js's pattPunctuation).
 func isEscapable(c byte) bool {
-	return strings.IndexByte("\\`*_{}[]()#+-.!|\"'~^:<>$%=", c) >= 0
+	return strings.IndexByte("\\`*_{}[]()#+-.!|\"'~^:<>$%=&,/;?@", c) >= 0
+}
+
+// escapedLineEnd is where an escaped line end starting at i (the byte after
+// the backslash) ends: the newline after any spaces and tabs, as djot.js's
+// `[ \t]*\n`; -1 when the backslash escapes no line end.
+func escapedLineEnd(raw string, i int) int {
+	j := i
+	for j < len(raw) && (raw[j] == ' ' || raw[j] == '\t') {
+		j++
+	}
+	if j < len(raw) && raw[j] == '\n' {
+		return j
+	}
+	return -1
+}
+
+// backslashGoes reports whether the backslash at i goes in a label or a
+// destination: before punctuation, a space (an escaped space is a space
+// there, djot.js) or a line end.
+func backslashGoes(raw string, i int) bool {
+	if i+1 >= len(raw) {
+		return false
+	}
+	return isEscapable(raw[i+1]) || raw[i+1] == ' ' || escapedLineEnd(raw, i+1) >= 0
+}
+
+// unescapeLabel is a reference label as djot.js keys it, before
+// normalizeLabel: a backslash goes before punctuation, a space or a line end
+// (backslashGoes).
+func unescapeLabel(raw string) string {
+	if !strings.Contains(raw, "\\") {
+		return raw
+	}
+	buf := make([]byte, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '\\' && backslashGoes(raw, i) {
+			i++
+		}
+		buf = append(buf, raw[i])
+	}
+	return string(buf)
 }
 
 func countRunAt(src string, pos int, char byte) int {
@@ -1190,12 +1233,17 @@ func trimVerbatimContent(raw string) string {
 	return raw[start:end]
 }
 
-// processUrl joins a destination split over lines and resolves escapes.
+// processUrl is a destination as djot.js builds it: a line end joins the
+// lines without the next line's indent, an escaped line end drops the blanks
+// before it too, and a backslash before punctuation or a space goes.
 func processUrl(raw string) string {
 	if !strings.ContainsAny(raw, "\n\\") {
 		return raw
 	}
 	buf := make([]byte, 0, len(raw))
+	// kept is the end of the last escaped byte: the trim before an escaped
+	// line end stops there, so that an escaped space stays.
+	kept := 0
 	for i := 0; i < len(raw); {
 		switch {
 		case raw[i] == '\n':
@@ -1203,9 +1251,18 @@ func processUrl(raw string) string {
 			for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t') {
 				i++
 			}
-		case raw[i] == '\\' && i+1 < len(raw) && isEscapable(raw[i+1]):
+		case raw[i] == '\\' && escapedLineEnd(raw, i+1) >= 0:
+			// An escaped line end takes the blanks before it, as djot.js
+			// trims the text before a hard break; the blanks after the
+			// backslash stay, and the newline takes the line-end branch.
+			for len(buf) > kept && (buf[len(buf)-1] == ' ' || buf[len(buf)-1] == '\t') {
+				buf = buf[:len(buf)-1]
+			}
+			i++
+		case raw[i] == '\\' && backslashGoes(raw, i):
 			buf = append(buf, raw[i+1])
 			i += 2
+			kept = len(buf)
 		default:
 			buf = append(buf, raw[i])
 			i++
