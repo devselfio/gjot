@@ -658,7 +658,7 @@ func (d *djotWriter) definition(i int) []string {
 // div's fence carries. An id or class the short form cannot spell, an empty
 // id among them, is written as its key.
 func attrSet(n *Node) string {
-	attrs := n.renderedAttrs()
+	attrs := n.Attrs
 	if n.Tag == Div {
 		attrs = withoutLastClass(attrs, divFenceClass(n))
 	}
@@ -716,7 +716,7 @@ func allWords(words []string, ok func(byte) bool) bool {
 // before it (`{.x}` then `::: y` reads back as `class="x y"`; `{.y k=v}`
 // then `:::` keeps its order only with `.y` in the attribute line).
 func divFenceClass(n *Node) string {
-	attrs := n.renderedAttrs()
+	attrs := n.Attrs
 	if len(attrs) == 0 || attrs[len(attrs)-1].Key != "class" {
 		return ""
 	}
@@ -818,7 +818,7 @@ func (w *inlineWriter) prev() byte {
 	return s[len(s)-1]
 }
 
-func isText(n *Node) bool { return n.Tag == Str || n.Tag == Escape }
+func isText(n *Node) bool { return n.Tag == Str }
 
 // nodes writes a sequence, coalescing adjacent text nodes so escaping sees
 // the whole run (an escaped "." may have split "1." into two nodes). The run
@@ -975,7 +975,7 @@ func (w *inlineWriter) attrs(n *Node) {
 
 func (w *inlineWriter) node(n *Node, next *Node) {
 	switch n.Tag {
-	case Str, Escape:
+	case Str:
 		// nodes, node's only caller, writes text runs itself; this case is
 		// kept so that a text node is never silently dropped.
 		if loneQuote(n) != "" {
@@ -1077,14 +1077,6 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 			w.write("--")
 		}
 		w.prevDash = true
-	case LeftSingleQuote:
-		w.write("\u2018")
-	case RightSingleQuote:
-		w.write("\u2019")
-	case LeftDoubleQuote:
-		w.write("\u201c")
-	case RightDoubleQuote:
-		w.write("\u201d")
 	default:
 		w.nodes(n.Children)
 	}

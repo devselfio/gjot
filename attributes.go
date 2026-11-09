@@ -428,27 +428,6 @@ func isAlphanumeric(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
-// tryParseBlockAttr parses a line that is nothing but an attribute set.
-func tryParseBlockAttr(line string) (blockAttrs, bool) {
-	trimmed := strings.Trim(line, " \t")
-	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
-		return blockAttrs{}, false
-	}
-	return parseAttrsFromStr(trimmed)
-}
-
-// parseAttrsFromStr parses src, which must begin with '{' and close within it.
-func parseAttrsFromStr(src string) (blockAttrs, bool) {
-	if len(src) < 2 || src[0] != '{' {
-		return blockAttrs{}, false
-	}
-	p := newAttrParser(src)
-	if status, _ := p.feed(0, len(src)-1); status != attrDone {
-		return blockAttrs{}, false
-	}
-	return p.finish(), true
-}
-
 // parseInlineAttrs parses an attribute set starting at src[pos] and returns
 // the index just past its closing brace.
 func parseInlineAttrs(src string, pos int) (blockAttrs, int, bool) {

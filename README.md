@@ -160,3 +160,12 @@ spec_test.go     Corpus runner over testdata/spec/*.test
 cmd/gjot         CLI
 cmd/driftcheck   Corpus drift check against zjot
 ```
+
+## Changes
+
+- 2026-11-09. Removed from the public API: the `Tag` constants
+  `ReferenceDefinition`, `Escape`, `LeftSingleQuote`, `RightSingleQuote`,
+  `LeftDoubleQuote` and `RightDoubleQuote`, which `Parse` never produced and no
+  renderer needed; and the `Node.Classes` field (JSON `classes`), which `Parse`
+  never set. A node's classes are its `class` entry in `Attrs`, read by
+  `HasClass`.

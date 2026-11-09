@@ -93,22 +93,11 @@ type inlineParser struct {
 	noFootnoteBefore int
 }
 
-func parseInlines(lines []string) []*Node {
-	if len(lines) == 0 {
-		return nil
-	}
-	return parseInlineContent(strings.Join(lines, "\n"))
-}
-
-func parseInlineContent(src string) []*Node {
-	nodes, _ := parseLeafInlines(src, 0, true)
-	return nodes
-}
-
-// parseLeafInlines is parseInlineContent for the container stack: no inline
-// attribute is read at an offset before attrsFrom, endsLine says whether a
-// line end follows src, and the ids of inline attributes that attached to
-// no node (or that a later id replaced) are returned rather than lost.
+// parseLeafInlines parses the inline source for the container stack: no
+// inline attribute is read at an offset before attrsFrom, endsLine says
+// whether a line end follows src, and the ids of inline attributes that
+// attached to no node (or that a later id replaced) are returned rather than
+// lost.
 func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string) {
 	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
 	nodes = p.parse()

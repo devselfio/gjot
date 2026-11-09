@@ -10,8 +10,8 @@ import (
 // the definitions (references and footnotes), the ids, sections, reference
 // resolution and the footnote section. zjot's log, counters and Reserved
 // places exist because it assigns ids after a block is streamed out; gjot
-// builds the whole tree, so the container stack registers each id where it
-// stands (farraway/gridapp#12, Decision 2).
+// builds the whole tree, so they are not ported and the container stack
+// registers each id where it stands.
 
 // refDefinition is a reference definition: its url, and the block
 // attributes written before it, if any.
