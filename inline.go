@@ -59,6 +59,11 @@ type inlineItem struct {
 	node   *Node
 	opener openerInfo
 	attrs  blockAttrs
+	// An attribute item's source extent [attrsStart, attrsEnd); attrsDeep
+	// says MaxNesting openers were open when it was read, so a span it
+	// would make is one level too many (mayOpen) and it is text instead.
+	attrsStart, attrsEnd int
+	attrsDeep            bool
 }
 
 type inlineParser struct {
@@ -294,7 +299,7 @@ func (p *inlineParser) parse() []*Node {
 			p.flushText()
 			if ba, end, ok := p.inlineAttrs(p.pos); ok {
 				if !ba.empty() {
-					p.items = append(p.items, inlineItem{kind: itemAttrs, attrs: ba})
+					p.items = append(p.items, inlineItem{kind: itemAttrs, attrs: ba, attrsStart: p.pos, attrsEnd: end, attrsDeep: len(p.openers) >= MaxNesting})
 				}
 				p.pos = end
 			} else {
@@ -1050,6 +1055,12 @@ func (p *inlineParser) resolve(items []inlineItem) []*Node {
 				nodes = p.appendText(nodes, p.openerText(it.opener))
 			}
 		case itemAttrs:
+			if it.attrsDeep && spanWord(nodes) >= 0 {
+				// The span would nest past MaxNesting: the attribute is text.
+				p.tooDeep = true
+				nodes = p.appendText(nodes, strNode(p.src[it.attrsStart:it.attrsEnd], it.attrsStart))
+				continue
+			}
 			nodes = p.attach(nodes, it.attrs)
 		}
 	}
@@ -1100,6 +1111,28 @@ func (p *inlineParser) resolveItems() []*Node {
 // with nothing left: text whose source is the quote it was written as.
 func isSmartQuote(n *Node) bool { return n.Tag == Str && n.Source != "" }
 
+// spanWord is where the word an inline attribute after nodes wraps in a span
+// starts in the last node's text, or -1 when it makes no span: the last
+// node is no text, a smart quote, or text ending in a blank.
+func spanWord(nodes []*Node) int {
+	if len(nodes) == 0 {
+		return -1
+	}
+	last := nodes[len(nodes)-1]
+	if last.Tag != Str || isSmartQuote(last) {
+		return -1
+	}
+	wordStart := 0
+	if i := strings.LastIndexFunc(last.Text, isJSSpace); i >= 0 {
+		_, n := utf8.DecodeRuneInString(last.Text[i:])
+		wordStart = i + n
+	}
+	if wordStart == len(last.Text) {
+		return -1
+	}
+	return wordStart
+}
+
 // attachAttrs attaches ba to the node before it: a text node's last word
 // becomes a span (the word after the last blank of any kind JavaScript's \s
 // counts, djot.js's `[^\s]+$`; no text across another node is gathered); a
@@ -1115,12 +1148,8 @@ func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 	last := nodes[len(nodes)-1]
 	if last.Tag == Str && !isSmartQuote(last) {
 		text := last.Text
-		wordStart := 0
-		if i := strings.LastIndexFunc(text, isJSSpace); i >= 0 {
-			_, n := utf8.DecodeRuneInString(text[i:])
-			wordStart = i + n
-		}
-		if wordStart == len(text) {
+		wordStart := spanWord(nodes)
+		if wordStart < 0 {
 			return nodes, ba.id
 		}
 		word := tail(last, wordStart)
