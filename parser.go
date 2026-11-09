@@ -15,7 +15,9 @@ import (
 // after the pass.
 //
 // Not ported from Parser.zig: block arenas, the held table, done/pending,
-// the id log and its counters, and the nesting limit.
+// and the id log and its counters. The nesting limit is gjot's own count
+// on the container stack (opening) and on the inline openers (mayOpen),
+// with zjot's number, MaxNesting; past it markers are text, not an error.
 
 // srcLine is one line of the input, without its line end (zjot Lines.zig):
 // where it starts, where its newline is (eol: col 0 of the next line, or the
@@ -297,11 +299,15 @@ type stackParser struct {
 	// lineCount is the lines consumed, lastBlockLine the line the last
 	// top-level block ended on.
 	lineCount, lastBlockLine int
+	// tooDeep: a block start or an inline opener was refused at
+	// MaxNesting.
+	tooDeep bool
 }
 
 // parseStack parses input with the container stack into the whole document
-// tree: the root Section that Parse returns.
-func parseStack(input string, trackPos bool) *Node {
+// tree: the root Section that Parse returns, and whether the nesting limit
+// stopped a block or an inline from nesting.
+func parseStack(input string, trackPos bool) (doc *Node, tooDeep bool) {
 	p := &stackParser{lines: splitLines(input), doc: newDocument(trackPos), trackPos: trackPos, leafLastNewline: true}
 	blocks := p.parseAll()
 	var end *SourcePos
@@ -312,7 +318,7 @@ func parseStack(input string, trackPos bool) *Node {
 		}
 		end = &e
 	}
-	return p.doc.finish(blocks, end)
+	return p.doc.finish(blocks, end), p.tooDeep
 }
 
 // parseAll runs every line through parseLine and closes what is open at
@@ -599,9 +605,27 @@ func (l *listData) accepts(sm stackMarker) bool {
 	return true
 }
 
+// opening is what a block start does before it pushes: it closes the
+// containers above matched and reports whether the start may open its
+// levels containers. Inside MaxNesting containers none does (zjot's
+// max_nesting): the start is text, and the parser records it. A refused
+// start has changed nothing, so the line goes on as a line with no marker:
+// lazy text for an open paragraph, or a paragraph in the innermost
+// container. The stack so never holds more than MaxNesting containers and
+// a leaf.
+func (p *stackParser) opening(matched, levels int, s stand) bool {
+	if matched+levels > MaxNesting {
+		p.tooDeep = true
+		return false
+	}
+	p.closeFrom(matched, s)
+	return true
+}
+
 // tryOpen tries the block starts at cur, in djot.js's order; on one, it
-// closes the containers above matched, pushes the new one and moves cur
-// past its marker, or to the line's end for a start that takes the line.
+// closes the containers above matched (opening), pushes the new one and
+// moves cur past its marker, or to the line's end for a start that takes
+// the line.
 func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	r := cur.rest()
 	s := cur.stand()
@@ -613,7 +637,9 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		if !ok || !list.accepts(sm) {
 			return false
 		}
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		if list.style == listOrdered {
 			list.ordered.accept(sm.m)
 		}
@@ -622,13 +648,17 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		return true
 	}
 	if startsBlockQuote(r) {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		p.push(kindBlockQuote, containerData{}, cur.pos())
 		cur.i++
 		return true
 	}
 	if level := headingLevel(r); level > 0 {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		p.push(kindHeading, containerData{level: level}, cur.pos())
 		p.tip().leafEnd = afterContent(cur.line)
 		cur.i += level
@@ -637,16 +667,24 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	// A caption ('^ ' at a block start): what is open above closes where
 	// its text starts; it joins the table before it as it closes.
 	if len(r) > 1 && r[0] == '^' && isSpaceOrTab(r[1]) {
-		cur.i++
-		cur.skipSpace()
-		p.closeFrom(matched, cur.stand())
+		// The cursor moves only once the start is allowed, so a refused
+		// one leaves the marker as text.
+		text := *cur
+		text.i++
+		text.skipSpace()
+		if !p.opening(matched, 1, text.stand()) {
+			return false
+		}
+		*cur = text
 		p.push(kindCaption, containerData{}, cur.pos())
 		p.tip().leafEnd = cur.pos()
 		return true
 	}
 	if def, ok := parseDefinitionLabel(r); ok {
 		if def.footnote() {
-			p.closeFrom(matched, s)
+			if !p.opening(matched, 1, s) {
+				return false
+			}
 			// Its own id, in the block attributes waiting for it, is
 			// registered where it is written, before its content's.
 			if ba := *p.attrsSlot(); ba != nil {
@@ -661,7 +699,9 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		// the line.
 		dest := strings.TrimRight(def.rest, " \t")
 		if !strings.ContainsAny(dest, " \t") && def.restCol+len(dest) == len(r) {
-			p.closeFrom(matched, s)
+			if !p.opening(matched, 1, s) {
+				return false
+			}
 			p.push(kindReferenceDefinition, containerData{label: normalizeLabel(def.refLabel()), indent: cur.indent}, cur.pos())
 			if dest != "" {
 				p.addLeafSlice(dest, cur.at(cur.i+def.restCol), cur.line)
@@ -671,7 +711,9 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		}
 	}
 	if isThematicBreak(r) {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		end := cur.line.eol
 		p.push(kindThematicBreak, containerData{end: &end}, cur.pos())
 		cur.i = len(cur.line.text)
@@ -679,8 +721,11 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	}
 	if sm, ok := listMarker(r); ok {
 		// The list opens on its first marker and leaves cur there, so the
-		// item opens under it on the next try.
-		p.closeFrom(matched, s)
+		// item opens under it on the next try: two levels, so a list never
+		// stands where its item could not open.
+		if !p.opening(matched, 2, s) {
+			return false
+		}
 		p.push(kindList, containerData{list: listData{
 			style: sm.kind, bullet: sm.bullet, ordered: sm.ordered, delim: sm.delim,
 			indent: cur.indent, markerText: sm.text, tight: true,
@@ -688,7 +733,9 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		return true
 	}
 	if isTableRow(r) {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		p.push(kindTable, containerData{}, cur.pos())
 		p.tableRow(p.tip(), cur)
 		return true
@@ -696,7 +743,9 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 	// A block attribute opens only when its first line parses so far or
 	// completes at its '}'; a line that fails is a paragraph.
 	if r[0] == '{' && opensAttrBlock(r) {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		ap := newAttrParser("")
 		status, _ := ap.feedLine(r)
 		p.push(kindAttributes, containerData{indent: cur.indent, attrParser: ap}, cur.pos())
@@ -710,14 +759,18 @@ func (p *stackParser) tryOpen(cur *cursor, matched int) bool {
 		return true
 	}
 	if dv, ok := isFencedDivStart(r); ok && divClass(dv.class) {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		p.push(kindDiv, containerData{divFenceLen: len(dv.fence), class: dv.class}, cur.pos())
 		cur.i = len(cur.line.text)
 		p.finishedLine = true
 		return true
 	}
 	if fence, ok := isCodeFence(r); ok {
-		p.closeFrom(matched, s)
+		if !p.opening(matched, 1, s) {
+			return false
+		}
 		p.push(kindCodeBlock, containerData{fence: fence, indent: cur.indent}, cur.pos())
 		cur.i = len(cur.line.text)
 		p.finishedLine = true
@@ -926,7 +979,8 @@ func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]*Node, string
 	if src == "" {
 		return nil, ""
 	}
-	nodes, dropped := parseLeafInlines(src, attrsFrom, endsLine)
+	nodes, dropped, deep := parseLeafInlines(src, attrsFrom, endsLine)
+	p.tooDeep = p.tooDeep || deep
 	for _, id := range dropped {
 		p.doc.ids.register(id)
 	}

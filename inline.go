@@ -59,6 +59,11 @@ type inlineItem struct {
 	node   *Node
 	opener openerInfo
 	attrs  blockAttrs
+	// An attribute item's source extent [attrsStart, attrsEnd); attrsDeep
+	// says MaxNesting openers were open when it was read, so a span it
+	// would make is one level too many (mayOpen) and it is text instead.
+	attrsStart, attrsEnd int
+	attrsDeep            bool
 }
 
 type inlineParser struct {
@@ -91,17 +96,19 @@ type inlineParser struct {
 	// noFootnoteBefore: no footnote reference opens before here
 	// (footnoteRefEnd).
 	noFootnoteBefore int
+	// tooDeep: an opener was refused at MaxNesting (mayOpen).
+	tooDeep bool
 }
 
 // parseLeafInlines parses the inline source for the container stack: no
 // inline attribute is read at an offset before attrsFrom, endsLine says
 // whether a line end follows src, and the ids of inline attributes that
 // attached to no node (or that a later id replaced) are returned rather than
-// lost.
-func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string) {
+// lost. tooDeep says an opener was refused at MaxNesting (mayOpen).
+func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string, tooDeep bool) {
 	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
 	nodes = p.parse()
-	return nodes, p.dropped
+	return nodes, p.dropped, p.tooDeep
 }
 
 // strNode is a text node sliced from the inline source at off.
@@ -149,6 +156,17 @@ func (p *inlineParser) pushNode(n *Node) {
 func (p *inlineParser) pushOpener(op openerInfo) {
 	p.openers = append(p.openers, op)
 	p.items = append(p.items, inlineItem{kind: itemOpener, opener: op})
+}
+
+// mayOpen reports whether another opener may be pushed: MaxNesting are
+// open at most, so the inlines of a leaf nest at most MaxNesting deep. A
+// delimiter refused here is what it is when it cannot open.
+func (p *inlineParser) mayOpen() bool {
+	if len(p.openers) >= MaxNesting {
+		p.tooDeep = true
+		return false
+	}
+	return true
 }
 
 // addText appends the source slice text at off, extending the previous node
@@ -250,7 +268,11 @@ func (p *inlineParser) parse() []*Node {
 					continue
 				case '+', '-', '=':
 					p.flushText()
-					p.pushOpener(openerInfo{char: next, itemIdx: len(p.items), srcPos: p.pos, marked: true})
+					if p.mayOpen() {
+						p.pushOpener(openerInfo{char: next, itemIdx: len(p.items), srcPos: p.pos, marked: true})
+					} else {
+						p.addText(src[p.pos:p.pos+2], p.pos)
+					}
 					p.pos += 2
 					p.textStart = p.pos
 					continue
@@ -265,7 +287,7 @@ func (p *inlineParser) parse() []*Node {
 			p.flushText()
 			if ba, end, ok := p.inlineAttrs(p.pos); ok {
 				if !ba.empty() {
-					p.items = append(p.items, inlineItem{kind: itemAttrs, attrs: ba})
+					p.items = append(p.items, inlineItem{kind: itemAttrs, attrs: ba, attrsStart: p.pos, attrsEnd: end, attrsDeep: len(p.openers) >= MaxNesting})
 				}
 				p.pos = end
 			} else {
@@ -281,8 +303,11 @@ func (p *inlineParser) parse() []*Node {
 				p.textStart = p.pos
 				continue
 			}
-			// The bracket is an item of its own: the opener's index points at it.
-			p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
+			// The bracket is an item of its own: the opener's index points
+			// at it. Refused at MaxNesting it is a bracket with no opener.
+			if p.mayOpen() {
+				p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
+			}
 			p.pushNode(strNode(src[p.pos:p.pos+1], p.pos))
 			p.pos++
 			p.textStart = p.pos
@@ -292,7 +317,9 @@ func (p *inlineParser) parse() []*Node {
 			// already matched.
 			if p.pos+1 < len(src) && src[p.pos+1] == '[' && p.footnoteRefEnd(p.pos+1) < 0 {
 				p.flushText()
-				p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
+				if p.mayOpen() {
+					p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
+				}
 				p.pushNode(strNode(src[p.pos:p.pos+2], p.pos))
 				p.pos += 2
 				p.textStart = p.pos
@@ -629,7 +656,12 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 	}
 
 	if marked || canOpenDelim(src, pos) {
-		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
+		start := openerStart(pos, marked)
+		if p.mayOpen() {
+			p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: start, marked: marked})
+		} else {
+			p.addText(src[start:pos+1], start)
+		}
 		p.pos = pos + 1
 		return
 	}
@@ -967,6 +999,14 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 		}
 	}
 
+	if canOpen && !p.mayOpen() {
+		// Refused at MaxNesting: the quote is a literal, and a marked
+		// one's brace text before it.
+		if marked {
+			p.addText(src[pos-1:pos], pos-1)
+		}
+		canOpen = false
+	}
 	if canOpen {
 		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 	} else if char == '\'' {
@@ -1003,6 +1043,12 @@ func (p *inlineParser) resolve(items []inlineItem) []*Node {
 				nodes = p.appendText(nodes, p.openerText(it.opener))
 			}
 		case itemAttrs:
+			if it.attrsDeep && spanWord(nodes) >= 0 {
+				// The span would nest past MaxNesting: the attribute is text.
+				p.tooDeep = true
+				nodes = p.appendText(nodes, strNode(p.src[it.attrsStart:it.attrsEnd], it.attrsStart))
+				continue
+			}
 			nodes = p.attach(nodes, it.attrs)
 		}
 	}
@@ -1053,6 +1099,28 @@ func (p *inlineParser) resolveItems() []*Node {
 // with nothing left: text whose source is the quote it was written as.
 func isSmartQuote(n *Node) bool { return n.Tag == Str && n.Source != "" }
 
+// spanWord is where the word an inline attribute after nodes wraps in a span
+// starts in the last node's text, or -1 when it makes no span: the last
+// node is no text, a smart quote, or text ending in a blank.
+func spanWord(nodes []*Node) int {
+	if len(nodes) == 0 {
+		return -1
+	}
+	last := nodes[len(nodes)-1]
+	if last.Tag != Str || isSmartQuote(last) {
+		return -1
+	}
+	wordStart := 0
+	if i := strings.LastIndexFunc(last.Text, isJSSpace); i >= 0 {
+		_, n := utf8.DecodeRuneInString(last.Text[i:])
+		wordStart = i + n
+	}
+	if wordStart == len(last.Text) {
+		return -1
+	}
+	return wordStart
+}
+
 // attachAttrs attaches ba to the node before it: a text node's last word
 // becomes a span (the word after the last blank of any kind JavaScript's \s
 // counts, djot.js's `[^\s]+$`; no text across another node is gathered); a
@@ -1068,12 +1136,8 @@ func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 	last := nodes[len(nodes)-1]
 	if last.Tag == Str && !isSmartQuote(last) {
 		text := last.Text
-		wordStart := 0
-		if i := strings.LastIndexFunc(text, isJSSpace); i >= 0 {
-			_, n := utf8.DecodeRuneInString(text[i:])
-			wordStart = i + n
-		}
-		if wordStart == len(text) {
+		wordStart := spanWord(nodes)
+		if wordStart < 0 {
 			return nodes, ba.id
 		}
 		word := tail(last, wordStart)
