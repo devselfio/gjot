@@ -483,3 +483,59 @@ func TestWriterFootnotes(t *testing.T) {
 		}
 	}
 }
+
+// The written document registers the ids the source registered, where the
+// re-parse reads them, so generated heading ids keep their numbers: an id
+// the tree does not hold (overridden, dropped with its attribute, a term's,
+// a replaced caption's) is carried by the heading that needs it as an inline
+// attribute attached to nothing; a footnote definition whose headings
+// generated their ids before a body heading is written before it, inside a
+// block or another definition when it stood inside it; an id that can no
+// longer be generated is written explicitly. A paragraph with two soft breaks in a row keeps its
+// middle line with an empty attribute (zjot.test L8636, L8169, L8557, L8219,
+// L2410, L7722, L7879, L8620).
+func TestWriterRegistersIDs(t *testing.T) {
+	cases := []struct{ input, want string }{
+		{"[x]{#a}{#b}\n\n# a\n", "[x]{#b}\n\n# {#a}a\n"},
+		{"{#a}\n{#b}\n# x\n\n# a\n\n# b\n", "{#b}\n# x\n\n# {#a}a\n\n# b\n"},
+		{": {#x}\n  term\n\n  # x\n\n# x\n", ": term\n\n  # {#x}x\n\n# x\n"},
+		{"| a |\n^ [x]{#Foo}\n\n^ cap\n\n# Foo\n", "| a |\n^ cap\n\n# {#Foo}Foo\n"},
+		{"[^n]:\n    # H\n\n# H\n\nx[^n]\n", "[^n]: # H\n\n# H\n\nx[^n]\n"},
+		{"[^a]: # Foo\n\n    [^b]: # Foo\n\n    # Foo\n\nx[^a] y[^b]\n", "x[^a] y[^b]\n\n[^a]: # Foo\n\n      [^b]: # Foo\n\n      # Foo\n"},
+		{"[^n]: # Foo\n\n{#Foo}\n# Bar\n\nuse[^n]\n", "[^n]: # Foo\n\n{#Foo}\n# Bar\n\nuse[^n]\n"},
+		{"a\n{#Foo}\nb\n\n# Foo\n", "a\n{}\nb\n\n# {#Foo}Foo\n"},
+		{"- [x]{#a}{#b}\n- # a\n", "- [x]{#b}\n- # {#a}a\n"},
+		{"> # A\n>\n> [^n]: # A\n>\n> # A\n\nx[^n]\n", "> # A\n>\n> [^n]: # A\n>\n> # A\n\nx[^n]\n"},
+	}
+	for _, c := range cases {
+		djot, html := roundTrip(t, c.input)
+		if djot != c.want {
+			t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, djot)
+		}
+		if want := htmlOf(t, c.input); html != want {
+			t.Errorf("round trip of %q: HTML %q, want %q", c.input, html, want)
+		}
+	}
+}
+
+// A heading whose generated id the written document can no longer generate
+// (a tree built by hand: the id a later heading of the same text would get)
+// is written with the id explicit, so its HTML stands.
+func TestWriterExplicitIDFallback(t *testing.T) {
+	doc := &Node{Tag: Section, Children: []*Node{
+		{Tag: Section, Level: 1, ID: "a-1", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
+		{Tag: Section, Level: 1, ID: "a", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
+	}}
+	djot := string(Djot(doc))
+	want := "# {#a}a\n\n{#a}\n# a\n"
+	if djot != want {
+		t.Errorf("got\n%s\nwant\n%s", djot, want)
+	}
+	got, err := HTML(Parse([]byte(djot)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantHTML := "<section id=\"a-1\">\n<h1>a</h1>\n</section>\n<section id=\"a\">\n<h1>a</h1>\n</section>\n"; string(got) != wantHTML {
+		t.Errorf("HTML\n%s\nwant\n%s", got, wantHTML)
+	}
+}

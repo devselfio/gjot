@@ -10,10 +10,21 @@ import (
 // Djot writes doc back as Djot source. The result re-parses to the same
 // HTML and AST (positions aside); it is not the original text. Reference
 // definitions are written as inline destinations and footnote definitions
-// after the document, with their labels.
+// with their labels, where the ids their headings generated demand it
+// (due), else after the document.
 func Djot(doc *Node) []byte {
-	d := &djotWriter{}
-	lines := d.blocks(doc.Children)
+	d := &djotWriter{ids: newIDs(), claims: map[*Node]*idClaims{}}
+	var body []*Node
+	for _, b := range doc.Children {
+		if b.Tag == Footnote {
+			d.defs = append(d.defs, b)
+		} else {
+			body = append(body, b)
+		}
+	}
+	d.placed = make([]bool, len(d.defs))
+	d.bound = len(d.defs)
+	lines := joinBlocks(d.blocks(body), d.place(len(d.defs)-1, nil))
 	for _, def := range d.refDefs {
 		lines = append(lines, "", "["+def.label+"]: "+def.url)
 	}
@@ -24,10 +35,24 @@ func Djot(doc *Node) []byte {
 }
 
 // djotWriter renders blocks and collects the reference definitions that
-// reference links need, written at the end of the document.
+// reference links need, written at the end of the document. It rebuilds
+// the document's id registry as the re-parse will read the written text
+// (ids, see headingID), and places the footnote definitions where the ids
+// their headings generated demand (due).
 type djotWriter struct {
 	refDefs []refDefOut
 	defined map[string]bool
+	// ids is the registry the written document builds as it is re-parsed:
+	// every id is registered as it is written, a heading's generated again.
+	ids ids
+	// defs is the footnote definitions in the order they close, placed as
+	// they are written (placed); bound is the index of the definition being
+	// written, or len(defs) outside one, since a definition nests only in
+	// one that closes after it. claims memoizes idClaims by node.
+	defs   []*Node
+	placed []bool
+	bound  int
+	claims map[*Node]*idClaims
 }
 
 type refDefOut struct {
@@ -50,16 +75,40 @@ func (d *djotWriter) defineRef(label, url string) bool {
 	return true
 }
 
-// blocks renders sibling blocks as lines with one blank line between.
+// blocks renders sibling blocks as lines with one blank line between, the
+// footnote definitions due before a block written before it.
 func (d *djotWriter) blocks(blocks []*Node) []string {
 	var lines []string
 	for i, b := range blocks {
 		if i > 0 {
 			lines = append(lines, "")
 		}
+		if defs := d.due(b); len(defs) > 0 {
+			lines = append(append(lines, defs...), "")
+		}
 		lines = append(lines, d.block(b)...)
 	}
 	return lines
+}
+
+// joinBlocks is the lines of two runs of blocks, a blank line between them
+// when both have lines.
+func joinBlocks(a, b []string) []string {
+	if len(a) > 0 && len(b) > 0 {
+		a = append(a, "")
+	}
+	return append(a, b...)
+}
+
+// attrLines is a block's attribute line, none when it has no attributes,
+// its id registered where the line stands.
+func (d *djotWriter) attrLines(n *Node) []string {
+	a := attrSet(n)
+	if a == "" {
+		return nil
+	}
+	d.ids.register(explicitID(n))
+	return []string{a}
 }
 
 // indented prefixes lines: the first with first, blank lines with blank,
@@ -80,30 +129,32 @@ func indented(lines []string, first, rest, blank string) []string {
 }
 
 func (d *djotWriter) block(n *Node) []string {
-	var lines []string
-	switch n.Tag {
-	case Section:
-		if a := attrSet(n); a != "" {
-			lines = append(lines, a)
+	if n.Tag == Section {
+		if len(n.Children) > 0 && n.Children[0].Tag == Heading {
+			return d.blocks(unsectioned(n))
 		}
-		return append(lines, d.blocks(n.Children)...)
+		return append(d.attrLines(n), d.blocks(n.Children)...)
 	}
-	if a := attrSet(n); a != "" {
-		lines = append(lines, a)
-	}
+	lines := d.attrLines(n)
 	switch n.Tag {
 	case Footnote:
-		return append(lines, d.footnote(n)...)
+		return append(lines, d.footnote(n, d.blocks(n.Children))...)
 	case OrderedList:
 		return append(lines, d.orderedList(n)...)
 	case Para:
-		return append(lines, d.leafLines(n.Children)...)
+		return append(lines, d.leafLines(n.Children, "")...)
 	case Heading:
 		hashes := strings.Repeat("#", n.Level)
-		if len(n.Children) == 0 {
+		carriers, explicit := d.headingID(n)
+		if explicit {
+			e := *n
+			e.AutoID = false
+			lines = d.attrLines(&e)
+		}
+		if len(n.Children) == 0 && carriers == "" {
 			return append(lines, hashes)
 		}
-		return append(lines, indented(d.leafLines(n.Children), hashes+" ", hashes+" ", "")...)
+		return append(lines, indented(d.leafLines(n.Children, carriers), hashes+" ", hashes+" ", "")...)
 	case ThematicBreak:
 		return append(lines, "* * *")
 	case CodeBlock, RawBlock:
@@ -329,12 +380,10 @@ func (d *djotWriter) table(n *Node) []string {
 	// list the table ends tight; its block attributes stand before it, as
 	// any block's do. One with neither content nor attributes is not written.
 	if caption != nil {
-		a := attrSet(caption)
-		if a != "" {
-			lines = append(lines, a)
-		}
-		if a != "" || len(caption.Children) > 0 {
-			lines = append(lines, indented(d.leafLines(caption.Children), "^ ", "", "")...)
+		a := d.attrLines(caption)
+		lines = append(lines, a...)
+		if len(a) > 0 || len(caption.Children) > 0 {
+			lines = append(lines, indented(d.leafLines(caption.Children, ""), "^ ", "", "")...)
 		}
 	}
 	return lines
@@ -366,17 +415,241 @@ func separatorLine(row *Node) string {
 	return "|" + strings.Join(cells, "|") + "|"
 }
 
-// footnote writes a footnote definition under its label, the content
-// indented by the marker's width so a code block keeps its indentation
-// relative to its fence (the footnote's lines need only be indented past
-// the label's).
-func (d *djotWriter) footnote(n *Node) []string {
+// footnote writes a footnote definition's lines under its label, the
+// content indented by the marker's width so a code block keeps its
+// indentation relative to its fence (the footnote's lines need only be
+// indented past the label's).
+func (d *djotWriter) footnote(n *Node, inner []string) []string {
 	marker := "[^" + n.Text + "]:"
-	inner := d.blocks(n.Children)
 	if len(inner) == 0 {
 		return []string{marker}
 	}
 	return indented(inner, marker+" ", strings.Repeat(" ", len(marker)+1), "")
+}
+
+// unsectioned is a section's blocks with its heading given back the id and
+// attributes the document moved onto the section (document.sections), so
+// the heading writes them and registers them where it stands.
+func unsectioned(sec *Node) []*Node {
+	h := *sec.Children[0]
+	h.ID, h.AutoID = sec.ID, sec.AutoID
+	h.Attrs = append(append([]Attr{}, sec.Attrs...), h.Attrs...)
+	return append([]*Node{&h}, sec.Children[1:]...)
+}
+
+// explicitID is the id a node's attribute set writes, "" when none: the
+// written one, else the id the document gave the node when not generated.
+func explicitID(n *Node) string {
+	if id, written := n.writtenID(); written {
+		return id
+	}
+	if !n.AutoID {
+		return n.ID
+	}
+	return ""
+}
+
+// --- Ids and footnote definitions ---
+//
+// djot.js registers every id as it reads it, and a heading's generated id
+// avoids every id registered before it; so the written document must
+// register, before each heading, what the source registered before it. The
+// tree does not hold every such id (one a later attribute overrode, one on
+// an attribute dropped with a blank line or a container's end, a term's, a
+// replaced or dropped caption's, one attached to nothing), and holds the
+// footnote definitions after the body, wherever they stood: headingID
+// carries the missing ids on the heading, and due writes each definition
+// where its headings' ids say it stood.
+
+// headingID settles n's id in the registry as the re-parse will: a written
+// id was registered with its attribute line; a generated one is generated
+// again, after the carriers returned here register what the source
+// registered before the heading and the tree does not hold: inline
+// attributes attached to nothing, written at the heading's start, one per
+// id between the registry's state and the heading's. The heading's own
+// inlines register theirs after this, where the re-parse reads them before
+// the heading's: none can be the heading's id, which was generated after
+// them, so the carriers come out the same, at most one of them redundant.
+// When the id cannot be generated any more (a tree built by hand that
+// numbers headings out of order) explicit is set and the caller writes the
+// id on the heading.
+func (d *djotWriter) headingID(n *Node) (carriers string, explicit bool) {
+	text := stringContent(n.Children, false)
+	if n.ID == "" {
+		d.ids.generate(text)
+		return "", false
+	}
+	if !n.AutoID {
+		return "", false
+	}
+	g, ok := idTarget(text, n.ID)
+	if !ok || d.ids.used[n.ID] || g.k > 0 && d.ids.nextSuffix[g.base] > g.k {
+		return "", true
+	}
+	for {
+		c := d.ids.generate(text)
+		if c == n.ID {
+			return carriers, false
+		}
+		carriers += "{" + attrPart("id", c) + "}"
+	}
+}
+
+// genID is a generated id as idTarget reads it: its base (idBase of the
+// heading's text, "s" when that is empty) and its suffix, 0 for the base
+// itself.
+type genID struct {
+	id, base string
+	k        int
+	empty    bool
+}
+
+// idTarget reads id as an id generate makes of text; ok is false when it
+// is not one (a tree built by hand).
+func idTarget(text, id string) (g genID, ok bool) {
+	g = genID{id: id, base: idBase(text)}
+	if g.empty = g.base == ""; g.empty {
+		g.base = "s"
+	}
+	if id == g.base {
+		return g, !g.empty
+	}
+	rest, found := strings.CutPrefix(id, g.base+"-")
+	if !found {
+		return g, false
+	}
+	g.k, _ = strconv.Atoi(rest)
+	return g, g.k >= 1 && strconv.Itoa(g.k) == rest
+}
+
+// covers reports whether generating g needed id taken: its base (which an
+// empty text never has), and every suffix below its own.
+func (g genID) covers(id string) bool {
+	if id == g.base {
+		return g.k > 0 && !g.empty
+	}
+	rest, found := strings.CutPrefix(id, g.base+"-")
+	if !found {
+		return false
+	}
+	i, err := strconv.Atoi(rest)
+	return err == nil && i >= 1 && i < g.k && strconv.Itoa(i) == rest
+}
+
+// idClaims is what a subtree registers as it is re-parsed: the ids its
+// headings generate and the ids written on its nodes.
+type idClaims struct {
+	generated []genID
+	explicit  map[string]bool
+}
+
+func (d *djotWriter) claimsOf(n *Node) *idClaims {
+	if c, ok := d.claims[n]; ok {
+		return c
+	}
+	c := &idClaims{explicit: map[string]bool{}}
+	c.collect(n)
+	d.claims[n] = c
+	return c
+}
+
+func (c *idClaims) collect(n *Node) {
+	if n.Tag == Section && len(n.Children) > 0 && n.Children[0].Tag == Heading {
+		for _, b := range unsectioned(n) {
+			c.collect(b)
+		}
+		return
+	}
+	if n.Tag == Heading && n.AutoID && n.ID != "" {
+		if g, ok := idTarget(stringContent(n.Children, false), n.ID); ok {
+			c.generated = append(c.generated, g)
+		}
+	}
+	if id := explicitID(n); id != "" {
+		c.explicit[id] = true
+	}
+	for _, ch := range n.Children {
+		c.collect(ch)
+	}
+}
+
+// before reports whether an id a's headings generate must be registered
+// before b is re-parsed: b writes it, or a heading of b generated an id
+// that needed it taken.
+func (d *djotWriter) before(a, b *Node) bool {
+	ca, cb := d.claimsOf(a), d.claimsOf(b)
+	for _, g := range ca.generated {
+		if cb.explicit[g.id] {
+			return true
+		}
+		for _, h := range cb.generated {
+			if h.covers(g.id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// due is the footnote definitions written before next: the unplaced ones
+// that must stand before it (before), every definition closing before one
+// of those (the definitions are in closing order, which the re-parse must
+// see again), and every later definition one of those must follow, which
+// it then nests in.
+func (d *djotWriter) due(next *Node) []string {
+	k := -1
+	for i := 0; i < d.bound; i++ {
+		if !d.placed[i] && d.before(d.defs[i], next) {
+			k = i
+		}
+	}
+	for grown := true; grown; {
+		grown = false
+		for i := 0; i <= k; i++ {
+			for j := k + 1; j < d.bound && !d.placed[i]; j++ {
+				if !d.placed[j] && d.before(d.defs[j], d.defs[i]) {
+					k, grown = j, true
+				}
+			}
+		}
+	}
+	return d.place(k, next)
+}
+
+// place writes the unplaced definitions up to index k in their order, but
+// for one that must follow next (it stands inside next, as do those after
+// it) and for one that must follow a later definition up to k (it nests
+// there, written at its end at the latest).
+func (d *djotWriter) place(k int, next *Node) []string {
+	var lines []string
+	for i := 0; i <= k; i++ {
+		if d.placed[i] {
+			continue
+		}
+		if next != nil && d.before(next, d.defs[i]) {
+			break
+		}
+		nested := false
+		for j := i + 1; j <= k && !nested; j++ {
+			nested = !d.placed[j] && d.before(d.defs[j], d.defs[i])
+		}
+		if !nested {
+			lines = joinBlocks(lines, d.definition(i))
+		}
+	}
+	return lines
+}
+
+// definition writes footnote definition i, with the unplaced definitions
+// that close before it nested at its end.
+func (d *djotWriter) definition(i int) []string {
+	n := d.defs[i]
+	d.placed[i] = true
+	outer := d.bound
+	d.bound = i
+	inner := joinBlocks(d.blocks(n.Children), d.place(i-1, nil))
+	d.bound = outer
+	return append(d.attrLines(n), d.footnote(n, inner)...)
 }
 
 // attrSet writes a node's attributes as `{#id .c k="v"}`, or "" when it has
@@ -501,9 +774,13 @@ type inlineWriter struct {
 // parser trims: a trailing soft break or space gets an empty attribute
 // after it, so the break does not read as a blank line and the space is
 // not trimmed, and a trailing hard break is written as its backslash alone,
-// which ends the leaf.
-func (d *djotWriter) leafLines(nodes []*Node) []string {
-	text := d.inlines(nodes)
+// which ends the leaf. prefix opens the leaf (a heading's id carriers),
+// written where the inlines see it: a quote after it is not at a line's start.
+func (d *djotWriter) leafLines(nodes []*Node, prefix string) []string {
+	w := newInlineWriter(d, true)
+	w.write(prefix)
+	w.nodes(nodes)
+	text := w.b.String()
 	switch {
 	case len(nodes) > 0 && nodes[len(nodes)-1].Tag == HardBreak:
 		text = strings.TrimSuffix(text, "\n")
@@ -690,8 +967,10 @@ func (w *inlineWriter) adopt(inner *inlineWriter) {
 	}
 }
 
+// attrs writes n's attribute set and registers its id where it stands.
 func (w *inlineWriter) attrs(n *Node) {
 	w.write(attrSet(n))
+	w.d.ids.register(explicitID(n))
 }
 
 func (w *inlineWriter) node(n *Node, next *Node) {
@@ -706,6 +985,9 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		}
 	case SoftBreak:
 		w.write("\n")
+		if next != nil && next.Tag == SoftBreak {
+			w.write("{}") // a line of its own, else the two breaks read as a blank line
+		}
 	case HardBreak:
 		if isInlineSpace(w.prev()) {
 			w.write("{}") // the parser trims the blanks before a hard break
@@ -768,8 +1050,8 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		w.write("[")
 		w.bracketed(n.Children)
 		w.write("]")
-		if a := attrSet(n); a != "" {
-			w.write(a)
+		if attrSet(n) != "" {
+			w.attrs(n)
 		} else {
 			w.write("{}")
 		}
@@ -779,7 +1061,7 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 	case FootnoteReference:
 		// Its label; a written id is dropped, as the HTML drops it.
 		w.write("[^" + n.Text + "]")
-		w.write(attrSet(&Node{Tag: FootnoteReference, Attrs: n.Attrs}))
+		w.attrs(&Node{Tag: FootnoteReference, Attrs: n.Attrs})
 	case Symb:
 		w.write(":" + n.Text + ":")
 		w.attrs(n)

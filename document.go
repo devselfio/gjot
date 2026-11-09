@@ -56,6 +56,10 @@ type ids struct {
 	nextSuffix map[string]int
 }
 
+func newIDs() ids {
+	return ids{used: map[string]bool{}, autoRefs: map[string]string{}, nextSuffix: map[string]int{}}
+}
+
 // register keeps an explicit id, read where it stands.
 func (t *ids) register(id string) {
 	if id != "" {
@@ -84,11 +88,10 @@ func isIDSeparator(r rune) bool {
 	return isJSSpace(r)
 }
 
-// generate is djot.js's getUniqueIdentifier, as zjot's Ids.generate: a run
-// of separators becomes one '-', none at either end, every other rune kept
-// (an invalid byte as the byte it was); an empty text gives s-1, s-2, ...;
-// a taken id gets the next free suffix.
-func (t *ids) generate(text string) string {
+// idBase is the id djot.js's getUniqueIdentifier makes of text before any
+// suffix: a run of separators becomes one '-', none at either end, every
+// other rune kept (an invalid byte as the byte it was); "" for no text.
+func idBase(text string) string {
 	var buf []byte
 	separated := false
 	for i := 0; i < len(text); {
@@ -105,7 +108,14 @@ func (t *ids) generate(text string) string {
 		buf = append(buf, text[i:i+size]...)
 		i += size
 	}
-	base := string(buf)
+	return string(buf)
+}
+
+// generate is djot.js's getUniqueIdentifier, as zjot's Ids.generate: the
+// base idBase gives when it is free; an empty text gives s-1, s-2, ...; a
+// taken id gets the next free suffix.
+func (t *ids) generate(text string) string {
+	base := idBase(text)
 	empty := base == ""
 	if empty {
 		base = "s"
@@ -155,12 +165,8 @@ type document struct {
 
 func newDocument(trackPos bool) *document {
 	return &document{
-		defs: definitions{refDefs: map[string]refDefinition{}, footnoteDefs: map[string]*footnoteDef{}},
-		ids: ids{
-			used:       map[string]bool{},
-			autoRefs:   map[string]string{},
-			nextSuffix: map[string]int{},
-		},
+		defs:     definitions{refDefs: map[string]refDefinition{}, footnoteDefs: map[string]*footnoteDef{}},
+		ids:      newIDs(),
 		trackPos: trackPos,
 	}
 }
