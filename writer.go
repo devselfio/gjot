@@ -186,9 +186,9 @@ func (d *djotWriter) block(n *Node) []string {
 // continuation indent markerOf gives it, with a blank line between items
 // when the list is loose. A loose list of one item with at most one block
 // has no gap to show it: the source had a block the AST does not hold (a
-// reference definition) after a blank line in the item, so the item ends
-// with `{}` after a blank line, which reads back as nothing and keeps the
-// list loose.
+// reference or footnote definition, a dropped block attribute or caption)
+// after a blank line in the item, so the item ends with `{}` after a blank
+// line, which reads back as nothing and keeps the list loose.
 func (d *djotWriter) listItems(n *Node, markerOf func(i int, item *Node) (marker, indent string)) []string {
 	var lines []string
 	for i, item := range n.Children {
@@ -645,7 +645,8 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 
 // text writes a run of text; apos and bounds are as for escapeText.
 func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
-	if w.lineStart && text != "" && isInlineSpace(text[0]) {
+	leadingBlanks := w.lineStart && text != "" && isInlineSpace(text[0])
+	if leadingBlanks {
 		w.write("{}") // the parser trims a line's leading whitespace
 	}
 	if w.prevDash && strings.HasPrefix(text, "-") {
@@ -656,6 +657,10 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
 		w.rawQuote['\''] = true
 	}
 	w.write(out)
+	// A line of blanks alone would read back as an empty attribute block.
+	if leadingBlanks && strings.TrimLeft(text, " \t") == "" && (next == nil || next.Tag == SoftBreak) {
+		w.write("{}")
+	}
 }
 
 // loneQuote is how a smart quote carrying attributes is written: a spelling

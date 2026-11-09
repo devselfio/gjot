@@ -440,3 +440,26 @@ func TestWriterItemThematicBreakAndLooseSingleItem(t *testing.T) {
 		})
 	}
 }
+
+// A paragraph line that is only blanks (what a block attribute with text
+// after its `}` leaves of its first line) is written `{}`, the blanks, `{}`:
+// without the closing `{}` the line reads back as an empty attribute block
+// and the paragraph loses it (zjot.test L9026, L9045).
+func TestWriterBlanksOnlyLine(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"tab-and-space-first-line", "{#x .b}\t {#y}\npara\n", "{}\t {}\npara\n"},
+		{"space-first-line", "{#x} {.c}\npara\n", "{} {}\npara\n"},
+		{"blanks-then-word", "{#x} junk\npara\n", "{} junk\npara\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			djot, _ := roundTrip(t, c.src)
+			if djot != c.want {
+				t.Errorf("written\n%s\nwant\n%s", djot, c.want)
+			}
+			want := string(ASTText(Parse([]byte(c.src))))
+			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+		})
+	}
+}
