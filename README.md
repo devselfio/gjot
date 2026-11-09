@@ -88,9 +88,12 @@ The nesting limit bounds the tree: it is never deeper than about twice
 `HTML`, `ASTText`, `Djot` and `encoding/json` all recurse through safely, so
 untrusted input cannot exhaust the stack. A block quote, div, list, list item
 or footnote counts one container (a list and its item two), as does a leaf
-block other than a paragraph. Where zjot returns `error.TooDeep` and no
-document, gjot returns the tree; check `errors.Is(err, gjot.ErrTooDeep)` from
-`ParseErr` to reject or flag such input.
+block other than a paragraph. In a leaf, each inline opener counts while it
+is open, whether or not it closes later, and the span an inline attribute
+makes around a word counts one more; so more than `MaxNesting` unclosed `[`
+in one paragraph also report `ErrTooDeep`, though nothing nests. Where zjot
+returns `error.TooDeep` and no document, gjot returns the tree; check
+`errors.Is(err, gjot.ErrTooDeep)` from `ParseErr` to reject or flag such input.
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the

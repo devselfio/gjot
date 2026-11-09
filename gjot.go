@@ -5,7 +5,9 @@ import "errors"
 // MaxNesting is how deep the parser nests: at most MaxNesting block
 // containers (block quotes, divs, lists and their items, footnote
 // definitions, ...) and, inside a leaf, at most MaxNesting inline elements.
-// A block marker or inline opener that would nest deeper is text. zjot's
+// A block marker, inline opener or attribute span that would nest deeper is
+// text. Inline openers are counted while open, closed later or not, so more
+// than MaxNesting unclosed openers in one leaf also stop there. zjot's
 // limit is the same number.
 const MaxNesting = 1000
 
