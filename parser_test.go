@@ -124,6 +124,21 @@ func TestStackUnits(t *testing.T) {
 		{"caption-with-no-table-is-dropped", "zjot.test L7478",
 			"^ alone\n\npara\n",
 			"<p>para</p>\n"},
+		{"caption-takes-waiting-block-attributes", "zjot.test L7573",
+			"| a |\n{.x}\n^ cap\n",
+			"<table>\n<caption class=\"x\">cap</caption>\n<tr>\n<td>a</td>\n</tr>\n</table>\n"},
+		{"caption-empty-renders-none", "zjot.test L4039",
+			"| a |\n|---|\n^ \n",
+			"<table>\n<tr>\n<th>a</th>\n</tr>\n</table>\n"},
+		{"cell-keeps-trailing-tab", "zjot.test L9477",
+			"| a\t|\n",
+			"<table>\n<tr>\n<td>a\t</td>\n</tr>\n</table>\n"},
+		{"cell-backslash-then-tab-is-text", "zjot.test L9395",
+			"| a\\\t|\n",
+			"<table>\n<tr>\n<td>a\\\t</td>\n</tr>\n</table>\n"},
+		{"cell-keeps-tab-after-escaped-space", "zjot.test L9488",
+			"| a\\ \t|\n",
+			"<table>\n<tr>\n<td>a&nbsp;\t</td>\n</tr>\n</table>\n"},
 	}
 	for _, c := range html {
 		t.Run(c.name, func(t *testing.T) {
@@ -193,6 +208,17 @@ func TestStackUnits(t *testing.T) {
       cell head=false align="default"
         str text="2"
 `, false},
+		// djot.js gives every table a caption, empty and unpositioned until
+		// one follows it.
+		{"table-without-caption-has-an-empty-one", "zjot.test L5158",
+			"|a|\n",
+			`doc
+  table (1:1:0-2:0:3)
+    caption
+    row (1:1:0-2:0:3) head=false
+      cell (1:1:0-1:3:2) head=false align="default"
+        str (1:2:1-1:2:1) text="a"
+`, true},
 	}
 	for _, c := range ast {
 		t.Run(c.name, func(t *testing.T) {
@@ -336,6 +362,15 @@ func TestBlockEnds(t *testing.T) {
   para (8:1:36-9:0:40)
     str (8:1:36-8:4:39) text="para"
 `},
+		{"row-ends-one-past-its-pipe-before-a-trailing-tab", "zjot.test L9013",
+			"| a |\t\n|---|\n",
+			`doc
+  table (1:1:0-3:0:12)
+    caption
+    row (1:1:0-1:6:5) head=true
+      cell (1:1:0-1:5:4) head=true align="default"
+        str (1:3:2-1:3:2) text="a"
+`},
 		{"definition-list-closed-by-div-fence-ends-past-it", "zjot.test L4274",
 			":::\n: t\n\n  d\n:::\n",
 			`doc
@@ -433,5 +468,57 @@ func TestHeadingIDFromText(t *testing.T) {
 		if html := htmlOf(t, src); !strings.Contains(html, `href="#`) {
 			t.Errorf("%q: the heading's implicit reference did not resolve:\n%s", src, html)
 		}
+	}
+}
+
+// An ordered list node carries djot.js's style ("1.", "(a)", "I)") in Style
+// and its first marker's text in Text, from which its start is read; it has
+// no start or type attribute, so the AST prints the style alone
+// (zjot.test L6467, L6486, L7706).
+func TestOrderedListNode(t *testing.T) {
+	cases := []struct {
+		input       string
+		style, text string
+	}{
+		{"3) a\n4) b\n", "1)", "3"},
+		{"(a) x\n(b) y\n", "(a)", "a"},
+		{"i. x\nii. y\n", "i.", "i"},
+		{"i. x\nj. y\n", "a.", "i"},
+		{"IV. x\n", "I.", "IV"},
+	}
+	for _, c := range cases {
+		list := Parse([]byte(c.input)).Children[0]
+		if list.Tag != OrderedList || list.Style != c.style || list.Text != c.text || len(list.Attrs) != 0 {
+			t.Errorf("%q: got tag=%s style=%q text=%q attrs=%v; want ordered_list style=%q text=%q, no attrs",
+				c.input, list.Tag, list.Style, list.Text, list.Attrs, c.style, c.text)
+		}
+	}
+	want := "doc\n  ordered_list tight=true style=\"(a)\"\n    list_item\n      para\n        str text=\"x\"\n" +
+		"  ordered_list tight=true style=\"1)\"\n    list_item\n      para\n        str text=\"z\"\n"
+	if got := string(ASTText(Parse([]byte("(a) x\n\n5) z\n")))); got != want {
+		t.Errorf("AST text:\n---got---\n%s---want---\n%s", got, want)
+	}
+}
+
+// Footnote definitions stand in the tree after the document's blocks as
+// `footnote` nodes with their label, in the order they first closed; a label
+// defined again keeps its place with its new content; a reference keeps its
+// normalized label, numbered only when rendered (grid.test L1311, L1628).
+func TestFootnoteDefinitionsInTree(t *testing.T) {
+	doc := Parse([]byte("use[^a  b]\n\n[^x]: one\n\n[^y]: two\n\n[^x]: three\n"))
+	var got []string
+	for _, b := range doc.Children {
+		switch b.Tag {
+		case Footnote:
+			got = append(got, "footnote "+b.Text+"="+b.Children[0].Children[0].Text)
+		case Para:
+			got = append(got, "para ref="+b.Children[1].Text)
+		default:
+			got = append(got, string(b.Tag))
+		}
+	}
+	want := []string{"para ref=a b", "footnote x=three", "footnote y=two"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("blocks = %v, want %v", got, want)
 	}
 }

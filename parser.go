@@ -1,7 +1,6 @@
 package gjot
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -759,12 +758,14 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		if content != "" {
 			p.addLeafSlice(content, cur.at(off+lead), cur.line)
 		}
-		children, _ := p.leafInlines(0)
+		// No line end follows a cell: its trailing tab is content.
+		children, _ := p.leafInlines(0, false)
 		cell := &Node{Tag: Cell, Children: children, Align: alignAt(c.data.aligns, i)}
 		row.Children = append(row.Children, p.spanned(cell, cur.at(off-1), cur.at(off+len(text))))
 		off += len(text) + 1
 	}
-	p.spanned(row, cur.pos(), afterContent(cur.line))
+	// A row ends one past its last pipe: a trailing tab is not content.
+	p.spanned(row, cur.pos(), afterBlanks(cur.line, " \t"))
 	c.children = append(c.children, row)
 	c.data.rowBefore = row
 }
@@ -874,7 +875,8 @@ func (p *stackParser) failedAttrsFrom() int {
 }
 
 // addLeafLine adds the rest of the line at cur as the open leaf's next
-// line. Trailing blanks stay: the inline parser trims them.
+// line. Trailing blanks stay: before a soft break they are content, and at
+// the leaf's end the inline parser trims the spaces, as djot.js.
 func (p *stackParser) addLeafLine(cur *cursor) {
 	p.addLeafSlice(cur.rest(), cur.pos(), cur.line)
 	t := p.tip()
@@ -906,6 +908,7 @@ func (p *stackParser) leafLineMap() lineMap {
 		m.segments = append(m.segments, lineSegment{joinedStart: joined, orig: p.leafStarts[i].pos, eol: p.leafStarts[i].eol})
 		joined += len(s) + 1
 	}
+	m.total = joined - 1
 	return m
 }
 
@@ -915,15 +918,16 @@ func (p *stackParser) dropLeaf() {
 }
 
 // leafInlines is the open leaf's inline content, and the text it was read
-// from; it empties the leaf buffers. The ids it holds are registered: those
-// of inline attributes left on no node first, then the tree's.
-func (p *stackParser) leafInlines(attrsFrom int) ([]*Node, string) {
+// from; it empties the leaf buffers. endsLine says whether a line end
+// follows the text (a cell's does not). The ids it holds are registered:
+// those of inline attributes left on no node first, then the tree's.
+func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]*Node, string) {
 	defer p.dropLeaf()
 	src := strings.Join(p.leafSlices, "\n")
 	if src == "" {
 		return nil, ""
 	}
-	nodes, dropped := parseLeafInlines(src, attrsFrom)
+	nodes, dropped := parseLeafInlines(src, attrsFrom, endsLine)
 	for _, id := range dropped {
 		p.doc.ids.register(id)
 	}
@@ -952,7 +956,7 @@ func (p *stackParser) leafText() string {
 
 // leafNode is a paragraph, heading or caption over the open leaf.
 func (p *stackParser) leafNode(c *container, tag Tag, level, attrsFrom int, s stand) *Node {
-	children, _ := p.leafInlines(attrsFrom)
+	children, _ := p.leafInlines(attrsFrom, true)
 	n := &Node{Tag: tag, Level: level, Children: children}
 	if p.trackPos {
 		n.Pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
@@ -978,9 +982,16 @@ func leafEnd(c *container, children []*Node, s stand) SourcePos {
 }
 
 // afterContent is one past the last byte of l that is not a trailing
-// space: its newline unless spaces trail. A trailing tab is content.
+// space: its newline unless spaces trail. A trailing tab is content, as
+// djot.js.
 func afterContent(l srcLine) SourcePos {
-	trimmed := len(strings.TrimRight(l.text, " "))
+	return afterBlanks(l, " ")
+}
+
+// afterBlanks is where l's content ends with blanks stripped from its end:
+// its newline when none trail, else one past the last other byte.
+func afterBlanks(l srcLine, blanks string) SourcePos {
+	trimmed := len(strings.TrimRight(l.text, blanks))
 	if trimmed == len(l.text) {
 		return l.eol
 	}
@@ -1039,7 +1050,7 @@ func (p *stackParser) close(s stand) {
 			// Waits for the next block in the container it was written in.
 			// An id a later one overrides was still read.
 			if *slot != nil {
-				if (*slot).id != "" && c.data.attrParser.writesID() {
+				if (*slot).id != "" && a.writesID() {
 					p.doc.ids.register((*slot).id)
 				}
 				merged := (*slot).merge(*a)
@@ -1068,14 +1079,18 @@ func (p *stackParser) close(s stand) {
 			def.pos = &Range{Start: c.start, End: s.pos}
 		}
 		*slot = nil
-		p.doc.defs.footnoteDefs[c.data.label] = def
+		p.doc.defs.defineFootnote(c.data.label, def)
 		return
 	case kindDiv:
 		end := s.pos
 		if c.data.end != nil {
 			end = *c.data.end
 		}
-		n = p.spanned(&Node{Tag: Div, Children: c.children, Classes: c.data.class}, c.start, end)
+		div := &Node{Tag: Div, Children: c.children}
+		if c.data.class != "" {
+			div.Attrs = []Attr{{"class", c.data.class}}
+		}
+		n = p.spanned(div, c.start, end)
 	case kindCodeBlock:
 		text := p.leafText()
 		end := s.pos
@@ -1108,7 +1123,9 @@ func (p *stackParser) close(s stand) {
 	case kindListItem:
 		n = p.spanned(p.itemNode(c), c.start, s.before)
 	case kindTable:
-		n = p.spanned(&Node{Tag: Table, Children: c.children}, c.start, s.pos)
+		// djot.js gives every table a caption, empty until one follows it.
+		children := append([]*Node{{Tag: Caption}}, c.children...)
+		n = p.spanned(&Node{Tag: Table, Children: children}, c.start, s.pos)
 	case kindCaption:
 		p.closeCaption(c, s)
 		return
@@ -1140,9 +1157,10 @@ func (p *stackParser) closeAs(n *Node, s stand) {
 }
 
 // closeCaption closes a caption: with the block attributes waiting before
-// it, it becomes the first child of the table before it, replacing an
-// earlier caption; with no table before it, it is dropped. Its ids, and
-// the waiting attributes' id, were registered either way.
+// it, it replaces the caption the table before it holds (the empty one it
+// was made with, or an earlier caption's); with no table before it, it is
+// dropped. Its ids, and the waiting attributes' id, were registered either
+// way.
 func (p *stackParser) closeCaption(c *container, s stand) {
 	n := p.leafNode(c, Caption, 0, 0, s)
 	slot := p.attrsSlot()
@@ -1158,11 +1176,7 @@ func (p *stackParser) closeCaption(c *container, s stand) {
 	if ba != nil {
 		applyBlockAttrs(n, *ba)
 	}
-	rows := table.Children
-	if len(rows) > 0 && rows[0].Tag == Caption {
-		rows = rows[1:]
-	}
-	table.Children = append([]*Node{n}, rows...)
+	table.Children[0] = n
 }
 
 // tableBefore is the last sibling, if a table: the table a caption closing
@@ -1178,9 +1192,10 @@ func (p *stackParser) tableBefore() *Node {
 	return nil
 }
 
-// listNodeOf is the node a closing list makes, in today's tree: a bullet or
-// task list with its tightness and first bullet, an ordered list with its
-// start and HTML type as attributes, or a definition list.
+// listNodeOf is the node a closing list makes: a bullet or task list with
+// its tightness and first bullet, an ordered list with djot.js's style
+// (the style it settled on, in its delimiter) and its first marker's text,
+// from which its start is read, or a definition list.
 func (p *stackParser) listNodeOf(c *container) *Node {
 	l := c.data.list
 	switch l.style {
@@ -1193,14 +1208,7 @@ func (p *stackParser) listNodeOf(c *container) *Node {
 		if len(l.ordered.possible) > 0 {
 			style = l.ordered.possible[0]
 		}
-		var attrs []Attr
-		if start := getListStart(l.markerText, style); start != 1 {
-			attrs = append(attrs, Attr{"start", strconv.Itoa(start)})
-		}
-		if t := style.htmlType(); t != "" {
-			attrs = append(attrs, Attr{"type", t})
-		}
-		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Attrs: attrs}
+		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Style: styleString(style, l.delim), Text: l.markerText}
 	}
 	return &Node{Tag: BulletList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
 }

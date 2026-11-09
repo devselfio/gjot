@@ -431,3 +431,30 @@ func TestLeafDefinitionLabelKind(t *testing.T) {
 		}
 	}
 }
+
+// An ordered list's style, as djot.js prints it: the style's first number
+// in the marker's delimiter. parseStyleString reads it back.
+func TestLeafStyleString(t *testing.T) {
+	for _, tc := range []struct {
+		s    listStyle
+		d    delim
+		want string
+	}{
+		{styleDecimal, delimPeriod, "1."}, {styleDecimal, delimParen, "1)"}, {styleDecimal, delimParens, "(1)"},
+		{styleLowerAlpha, delimPeriod, "a."}, {styleUpperAlpha, delimParen, "A)"},
+		{styleLowerRoman, delimParens, "(i)"}, {styleUpperRoman, delimPeriod, "I."},
+	} {
+		if got := styleString(tc.s, tc.d); got != tc.want {
+			t.Errorf("styleString(%d, %d) = %q, want %q", tc.s, tc.d, got, tc.want)
+		}
+		s, d, ok := parseStyleString(tc.want)
+		if !ok || s != tc.s || d != tc.d {
+			t.Errorf("parseStyleString(%q) = %d, %d, %v; want %d, %d, true", tc.want, s, d, ok, tc.s, tc.d)
+		}
+	}
+	for _, bad := range []string{"", "-", "1", "(1", "b.", "ii.", "1.."} {
+		if _, _, ok := parseStyleString(bad); ok {
+			t.Errorf("parseStyleString(%q) accepted", bad)
+		}
+	}
+}

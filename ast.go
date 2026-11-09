@@ -39,14 +39,15 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 	case Heading:
 		out = append(out, " level="...)
 		out = strconv.AppendInt(out, int64(n.Level), 10)
-	case BulletList:
+	case Footnote:
+		out = append(out, " label="...)
+		out = appendQuoted(out, n.Text)
+	case BulletList, OrderedList:
 		out = appendBool(out, " tight=", n.Tight)
 		if n.Style != "" {
 			out = append(out, " style="...)
 			out = appendQuoted(out, n.Style)
 		}
-	case OrderedList:
-		out = appendBool(out, " tight=", n.Tight)
 	case TaskListItem:
 		if n.Checked != nil {
 			out = appendBool(out, " checked=", *n.Checked)
@@ -77,15 +78,25 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 		out = append(out, " lang="...)
 		out = appendQuoted(out, n.Lang)
 	}
-	if n.ID != "" {
+	// Attributes print as the corpus's converter orders them: id, class, then
+	// the rest in source order. The written id wins over a generated one, an
+	// empty `id=""` included (zjot ast.zig).
+	attrs := n.renderedAttrs()
+	if id, written := n.writtenID(); written || n.ID != "" {
+		if !written {
+			id = n.ID
+		}
 		out = append(out, " id="...)
-		out = appendQuoted(out, n.ID)
+		out = appendQuoted(out, id)
 	}
-	if n.Classes != "" {
+	if class := valueOf(attrs, "class"); hasKey(attrs, "class") {
 		out = append(out, " class="...)
-		out = appendQuoted(out, n.Classes)
+		out = appendQuoted(out, class)
 	}
-	for _, a := range n.Attrs {
+	for _, a := range attrs {
+		if a.Key == "id" || a.Key == "class" {
+			continue
+		}
 		out = append(out, ' ')
 		out = append(out, a.Key...)
 		out = append(out, '=')

@@ -2,6 +2,8 @@ package gjot
 
 import (
 	"io"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -45,6 +47,118 @@ type renderer struct {
 	// divs (hooked or not) and definitions. Only lists set it; a
 	// definition list inherits the enclosing list's.
 	tight bool
+	// footnotes numbers the footnotes as djot.js's HTML renderer does:
+	// footnoteOrder holds the labels by first reference (a body reference
+	// in reading order, an image's alt text excepted, then the references
+	// inside the definitions as endnotes walks them), footnoteDefs the
+	// Footnote nodes met by label, footnoteLabels those labels in the
+	// order first met.
+	footnoteOrder  []string
+	footnoteDefs   map[string]*Node
+	footnoteLabels []string
+}
+
+// footnoteNumber is label's 1-based number, assigned on its first reference.
+func (r *renderer) footnoteNumber(label string) int {
+	for i, l := range r.footnoteOrder {
+		if l == label {
+			return i + 1
+		}
+	}
+	r.footnoteOrder = append(r.footnoteOrder, label)
+	return len(r.footnoteOrder)
+}
+
+// numberFootnotes numbers the footnote references the renderer would write
+// in n's tree: an image's children are its alt text, where a reference is
+// plain text.
+func (r *renderer) numberFootnotes(n *Node) {
+	if n.Tag == Image {
+		return
+	}
+	if n.Tag == FootnoteReference {
+		r.footnoteNumber(n.Text)
+	}
+	for _, c := range n.Children {
+		r.numberFootnotes(c)
+	}
+}
+
+// jsArrayIndex is label as the array index JavaScript orders an object's
+// keys by first: the canonical decimal of an integer below 2^32-1, no sign
+// or leading zero; false for any other key.
+func jsArrayIndex(label string) (int, bool) {
+	if label == "" || len(label) > 10 || (len(label) > 1 && label[0] == '0') {
+		return 0, false
+	}
+	v := 0
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		v = v*10 + int(c-'0')
+	}
+	if v >= 4294967295 {
+		return 0, false
+	}
+	return v, true
+}
+
+// endnotes writes the footnote section once the body has referenced a note
+// (djot.js writes it only then): every definition's references take their
+// numbers first, in the order djot.js walks its definitions object (labels
+// that are array indexes ascending, then the rest as first defined), so a
+// note first referenced inside another is numbered at the turn of the
+// definition that references it; then each numbered label's endnote, with
+// its backlink ending its last paragraph or in a paragraph of its own, and
+// only the backlink when nothing defines it.
+func (r *renderer) endnotes() {
+	if len(r.footnoteOrder) == 0 {
+		return
+	}
+	var indexes, rest []string
+	for _, label := range r.footnoteLabels {
+		if _, ok := jsArrayIndex(label); ok {
+			indexes = append(indexes, label)
+		} else {
+			rest = append(rest, label)
+		}
+	}
+	sort.SliceStable(indexes, func(i, j int) bool {
+		a, _ := jsArrayIndex(indexes[i])
+		b, _ := jsArrayIndex(indexes[j])
+		return a < b
+	})
+	for _, label := range append(indexes, rest...) {
+		for _, b := range r.footnoteDefs[label].Children {
+			r.numberFootnotes(b)
+		}
+	}
+	r.w("<section role=\"doc-endnotes\">\n<hr>\n<ol>\n")
+	for i := 0; i < len(r.footnoteOrder); i++ {
+		num := strconv.Itoa(i + 1)
+		backlink := "<a href=\"#fnref" + num + "\" role=\"doc-backlink\">↩︎</a>"
+		r.w("<li id=\"fn" + num + "\">\n")
+		var blocks []*Node
+		if def := r.footnoteDefs[r.footnoteOrder[i]]; def != nil {
+			blocks = def.Children
+		}
+		last := len(blocks) - 1
+		if last < 0 || blocks[last].Tag != Para {
+			last = len(blocks)
+		}
+		for _, b := range blocks[:last] {
+			r.render(b)
+		}
+		if last < len(blocks) {
+			r.para(blocks[last], backlink)
+		} else {
+			r.w("<p>" + backlink + "</p>\n")
+		}
+		r.w("</li>\n")
+	}
+	r.w("</ol>\n</section>\n")
 }
 
 func (r *renderer) w(s string) { r.out = append(r.out, s...) }
@@ -109,16 +223,7 @@ func (r *renderer) render(n *Node) {
 			r.children(n)
 		}
 	case Para:
-		if r.tight {
-			r.children(n)
-			r.w("\n")
-			return
-		}
-		r.w("<p")
-		r.attrs(n)
-		r.w(">")
-		r.children(n)
-		r.w("</p>\n")
+		r.para(n, "")
 	case Heading:
 		tag := "h6"
 		if n.Level >= 1 && n.Level <= 6 {
@@ -167,7 +272,15 @@ func (r *renderer) render(n *Node) {
 		r.tight = old
 		r.w("</ul>\n")
 	case OrderedList:
+		// The list's own start and type come before its attributes, as
+		// djot.js.
 		r.w("<ol")
+		if start := orderedStart(n); start != 1 {
+			r.w(" start=\"" + strconv.Itoa(start) + "\"")
+		}
+		if style, _, ok := parseStyleString(n.Style); ok && style.htmlType() != "" {
+			r.w(" type=\"" + style.htmlType() + "\"")
+		}
 		r.attrs(n)
 		r.w(">\n")
 		old := r.tight
@@ -176,13 +289,8 @@ func (r *renderer) render(n *Node) {
 		r.tight = old
 		r.w("</ol>\n")
 	case TaskList:
-		r.w("<ul class=\"task-list")
-		for _, c := range n.classList() {
-			r.w(" ")
-			r.attrEsc(c)
-		}
-		r.w("\"")
-		r.attrsWithoutClass(n)
+		r.w("<ul")
+		r.classed("task-list", n)
 		r.w(">\n")
 		old := r.tight
 		r.tight = n.Tight
@@ -224,9 +332,14 @@ func (r *renderer) render(n *Node) {
 		r.children(n)
 		r.w("</table>\n")
 	case Caption:
-		r.w("<caption>")
-		r.children(n)
-		r.w("</caption>\n")
+		// Every table has one; an empty caption is not rendered.
+		if len(n.Children) > 0 {
+			r.w("<caption")
+			r.attrs(n)
+			r.w(">")
+			r.children(n)
+			r.w("</caption>\n")
+		}
 	case Row:
 		r.w("<tr>\n")
 		r.children(n)
@@ -244,9 +357,16 @@ func (r *renderer) render(n *Node) {
 		r.children(n)
 		r.w("</" + tag + ">\n")
 	case Footnote:
-		r.w("<section role=\"doc-endnotes\">\n<hr>\n<ol>\n")
-		r.children(n)
-		r.w("</ol>\n</section>\n")
+		// A definition renders nothing where it stands; its content is
+		// endnote N when the body references it (endnotes). A label defined
+		// again replaces the earlier content.
+		if r.footnoteDefs == nil {
+			r.footnoteDefs = map[string]*Node{}
+		}
+		if _, seen := r.footnoteDefs[n.Text]; !seen {
+			r.footnoteLabels = append(r.footnoteLabels, n.Text)
+		}
+		r.footnoteDefs[n.Text] = n
 	case Str, Escape:
 		r.esc(n.Text)
 	case SoftBreak:
@@ -296,20 +416,16 @@ func (r *renderer) render(n *Node) {
 		r.children(n)
 		r.w("</span>")
 	case FootnoteReference:
-		r.w("<a")
-		if n.ID != "" {
-			r.w(" id=\"")
-			r.attrEsc(n.ID)
-			r.w("\"")
+		// The tag writes its own id (fnrefN); a written id is dropped, not
+		// written twice (zjot.test difference 3).
+		num := strconv.Itoa(r.footnoteNumber(n.Text))
+		r.w("<a id=\"fnref" + num + "\" href=\"#fn" + num + "\" role=\"doc-noteref\"")
+		for _, a := range n.renderedAttrs() {
+			if a.Key != "id" {
+				r.attr(a.Key, a.Value)
+			}
 		}
-		if n.Destination != nil {
-			r.w(" href=\"")
-			r.attrEsc(*n.Destination)
-			r.w("\"")
-		}
-		r.w(" role=\"doc-noteref\"><sup>")
-		r.esc(n.Text)
-		r.w("</sup></a>")
+		r.w("><sup>" + num + "</sup></a>")
 	case Superscript:
 		r.wrap("sup", n)
 	case Subscript:
@@ -321,27 +437,35 @@ func (r *renderer) render(n *Node) {
 	case Mark:
 		r.wrap("mark", n)
 	case InlineMath:
-		r.w("<span class=\"math inline\">\\(")
+		r.classed("math inline", n)
+		r.w(">\\(")
 		r.esc(n.Text)
 		r.w("\\)</span>")
 	case DisplayMath:
-		r.w("<span class=\"math display\">\\[")
+		r.classed("math display", n)
+		r.w(">\\[")
 		r.esc(n.Text)
 		r.w("\\]</span>")
 	case URL:
 		r.w("<a href=\"")
 		r.attrEsc(n.Text)
-		r.w("\">")
+		r.w("\"")
+		r.attrs(n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
 	case Email:
 		r.w("<a href=\"mailto:")
 		r.attrEsc(n.Text)
-		r.w("\">")
+		r.w("\"")
+		r.attrs(n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
 	case Symb:
-		r.w("<span class=\"symbol\">")
+		// zjot's rendering (djot.js prints the `:alias:` text; difference 4).
+		r.classed("symbol", n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</span>")
 	case DoubleQuoted:
@@ -404,43 +528,62 @@ func (r *renderer) listItems(list *Node) {
 	}
 }
 
-// attrs writes id, attrs, and classes; a "class" attr takes precedence over
-// the classes field.
+// para writes a paragraph with trailer inside it after its content; bare
+// inside a tight list.
+func (r *renderer) para(n *Node, trailer string) {
+	if r.tight {
+		r.children(n)
+		r.w(trailer + "\n")
+		return
+	}
+	r.w("<p")
+	r.attrs(n)
+	r.w(">")
+	r.children(n)
+	r.w(trailer + "</p>\n")
+}
+
+// attrs writes the node's attributes in source order, as djot.js: its id
+// where an `id` was written (an empty `id=""` included, over a generated
+// id), or first when the document gave it.
 func (r *renderer) attrs(n *Node) {
-	if n.ID != "" {
-		r.w(" id=\"")
-		r.attrEsc(n.ID)
-		r.w("\"")
-	}
-	r.attrList(n.Attrs)
-	if !hasKey(n.Attrs, "class") && n.Classes != "" {
+	r.filteredAttrs(n, false)
+}
+
+// classed opens a span (or, for a task list, a ul) whose intrinsic class
+// the node's classes join, then writes its other attributes, as djot.js.
+func (r *renderer) classed(intrinsic string, n *Node) {
+	if n.Tag == TaskList {
 		r.w(" class=\"")
-		r.attrEsc(n.Classes)
-		r.w("\"")
+	} else {
+		r.w("<span class=\"")
 	}
+	r.w(intrinsic)
+	for _, c := range n.classList() {
+		r.w(" ")
+		r.attrEsc(c)
+	}
+	r.w("\"")
+	r.filteredAttrs(n, true)
 }
 
-// attrsWithoutClass writes id and the attrs other than class, in attrs'
-// order, for a node whose classes the caller has already written.
-func (r *renderer) attrsWithoutClass(n *Node) {
-	if n.ID != "" {
-		r.w(" id=\"")
-		r.attrEsc(n.ID)
-		r.w("\"")
+func (r *renderer) filteredAttrs(n *Node, skipClass bool) {
+	attrs := n.renderedAttrs()
+	if n.ID != "" && !hasKey(attrs, "id") {
+		r.attr("id", n.ID)
 	}
-	for _, a := range n.Attrs {
-		if a.Key != "class" {
-			r.attrList([]Attr{a})
-		}
-	}
-}
-
-func (r *renderer) attrList(attrs []Attr) {
 	for _, a := range attrs {
-		r.w(" " + a.Key + "=\"")
-		r.attrEsc(a.Value)
-		r.w("\"")
+		if skipClass && a.Key == "class" {
+			continue
+		}
+		r.attr(a.Key, a.Value)
 	}
+}
+
+func (r *renderer) attr(key, value string) {
+	r.w(" " + key + "=\"")
+	r.attrEsc(value)
+	r.w("\"")
 }
 
 var htmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")

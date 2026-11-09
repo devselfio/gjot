@@ -79,21 +79,24 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 | `HTML(doc *Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
 | `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h`; `WalkSkipChildren` drops the default child rendering |
 | `ASTText(doc *Node) []byte` | Render the AST in djot.js's indented text format |
-| `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnotes are renumbered |
+| `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
 | `(*Node).HasClass(string) bool`, `(*Node).Attr(string) string` | Class and attribute lookup for hooks |
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the
 quote it was written as in `"source"` (`Node.Source`, empty on every other
-node), which alt text, heading ids and the writer read. Source positions are kept only
+node), which alt text, heading ids and the writer read. An ordered list keeps
+djot.js's style in `"style"` (`"1."`, `"(a)"`, `"I)"`) and its first marker's
+text in `"text"`, from which the HTML `start` is read. Source positions are kept only
 when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
 the inline nodes inside them. A definition list item's term and definition
-carry none, as zjot's AST prints none; the footnote section built at the end
-does not yet.
+carry none, as zjot's AST prints none. Footnote definitions stand after the
+document's blocks as `footnote` nodes with their label in `"text"`; the HTML
+renderer numbers the endnotes from them.
 
-Two things the writer cannot express, because the syntax has no form for them:
-an empty verbatim span in the middle of a paragraph (it is written as a trailing
-unclosed backtick) and math whose content starts or ends with a backtick.
+One thing the writer cannot express, because the syntax has no form for it: an
+empty verbatim or math span in the middle of a paragraph (it is written as a
+trailing unclosed backtick).
 
 ## Tests
 
@@ -108,25 +111,13 @@ push to `main` and every pull request. `make help` lists the targets.
 
 `TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
 of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
-and `zjot.test`), vendored byte for byte and pinned in
+and `zjot.test`), 1066 cases vendored byte for byte and pinned in
 `testdata/spec/ORIGIN.md`. Each case must render its expected output, and must
 render it again after being written back to Djot by `Djot` and re-parsed (for
-AST cases, the AST must not change). The 3 cases of `filters.test` skip because
-they need a Lua filter.
+AST cases, the AST must not change); a failing case fails the run. The 3 cases
+of `filters.test` skip because they need a Lua filter.
 
-`testdata/spec/known-failures.txt` lists the cases gjot does not yet pass, one
-per line as `<file>.test L<line>`, the line being that of the case's opening
-fence (e.g. `zjot.test L1234`), sorted by file then line; `#` comments and blank
-lines are allowed. Against that list:
-
-- a listed case that fails is reported as a known failure (a skipped subtest
-  with the entry and the diff) and does not fail the run;
-- a listed case that passes fails the run, naming the entry to delete;
-- an unlisted case that fails fails the run, naming the entry it would need;
-- an entry that names no case fails the run.
-
-The list only shrinks. The pass count is what the run prints, not a number kept
-here:
+The pass count is what the run prints, not a number kept here:
 
 ```
 make spec-count
@@ -165,7 +156,7 @@ linemap.go       Source position mapping for joined inline text
 html.go          HTML renderer and the class hook
 ast.go           AST text renderer
 writer.go        Djot writer
-spec_test.go     Corpus runner, judged against testdata/spec/known-failures.txt
+spec_test.go     Corpus runner over testdata/spec/*.test
 cmd/gjot         CLI
 cmd/driftcheck   Corpus drift check against zjot
 ```

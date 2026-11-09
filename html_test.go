@@ -1,6 +1,9 @@
 package gjot
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A tight bullet, ordered or task list renders every paragraph inside its
 // items bare, however deep in block quotes, divs and definition lists, as
@@ -72,6 +75,105 @@ func TestTaskListMergesClass(t *testing.T) {
 		{"no-class", "{#i}\n- [ ] a\n",
 			"<ul class=\"task-list\" id=\"i\">\n<li>\n<input disabled=\"\" type=\"checkbox\"/>\na\n</li>\n</ul>\n"},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}
+
+// An ordered list's start and type come before its written attributes, as
+// djot.js (zjot.test L6455).
+func TestOrderedListAttributeOrder(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"zjot.test L6455", "{#i .x k=v}\ni. a\n", "<ol type=\"i\" id=\"i\" class=\"x\" k=\"v\">\n<li>\na\n</li>\n</ol>\n"},
+		{"start before id", "{#i}\n5) a\n", "<ol start=\"5\" id=\"i\">\n<li>\na\n</li>\n</ol>\n"},
+		{"start then type", "b) x\n", "<ol start=\"2\" type=\"a\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"roman before alpha", "c) x\n", "<ol start=\"100\" type=\"i\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"roman start", "(iv) x\n", "<ol start=\"4\" type=\"i\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"decimal one", "1. x\n", "<ol>\n<li>\nx\n</li>\n</ol>\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}
+
+// Attributes render in source order, as djot.js: the id where an `id` was
+// written (an empty one included, over a generated id), first when the
+// document gave it; a class joins the intrinsic class of math, a symbol and
+// a task list; autolinks and footnote references take attributes too
+// (zjot.test L5933-L6003, L6941, L10336, L10367).
+func TestAttributeOrder(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"block key id class", "{k=v #i .c}\n> q\n", "<blockquote k=\"v\" id=\"i\" class=\"c\">\n<p>q</p>\n</blockquote>\n"},
+		{"section keeps order", "{k=v #i}\n# H\n", "<section k=\"v\" id=\"i\">\n<h1>H</h1>\n</section>\n"},
+		{"generated id first", "# h{k=v}\n", "<section id=\"h\">\n<h1><span k=\"v\">h</span></h1>\n</section>\n"},
+		{"empty id on a heading", "{id=\"\"}\n# h\n", "<section id=\"h\">\n<h1 id=\"\">h</h1>\n</section>\n"},
+		{"empty id over a generated one", "> {id=\"\"}\n> # h\n", "<blockquote>\n<h1 id=\"\">h</h1>\n</blockquote>\n"},
+		{"inline order", "[t](u){k=v #i .c}\n", "<p><a href=\"u\" k=\"v\" id=\"i\" class=\"c\">t</a></p>\n"},
+		{"math", "$`m`{#i .a k=v}\n", "<p><span class=\"math inline a\" id=\"i\" k=\"v\">\\(m\\)</span></p>\n"},
+		{"symbol", ":sym:{.a #i}\n", "<p><span class=\"symbol a\" id=\"i\">sym</span></p>\n"},
+		{"autolink", "<http://x>{#i k=v}\n", "<p><a href=\"http://x\" id=\"i\" k=\"v\">http://x</a></p>\n"},
+		{"email", "<a@b.c>{.a}\n", "<p><a href=\"mailto:a@b.c\" class=\"a\">a@b.c</a></p>\n"},
+		{"footnote reference", "x[^n]{.a #i}\n\n[^n]: n\n", "<p>x<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\" class=\"a\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn1\">\n<p>n<a href=\"#fnref1\" role=\"doc-backlink\">\u21a9\ufe0e</a></p>\n</li>\n</ol>\n</section>\n"},
+		{"div fence class joins last", "{.x}\n::: y\nz\n:::\n", "<div class=\"x y\">\n<p>z</p>\n</div>\n"},
+		{"an id an empty id overrides was read", "[a]{#y}{id=\"\"}\n\n# y\n", "<p><span id=\"\">a</span></p>\n<section id=\"y-1\">\n<h1>y</h1>\n</section>\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}
+
+// Endnotes are numbered as djot.js's HTML renderer numbers them: body
+// references in reading order, then every definition's references in
+// JavaScript's key order, array-index labels ascending first (zjot.test
+// L10160, L10192). A definition nothing references renders nothing; a
+// reference to no definition gets an endnote with only its backlink; the
+// endnotes follow the whole document, not the definition's place.
+func TestFootnoteEndnotes(t *testing.T) {
+	for _, c := range []struct {
+		label string
+		index int
+		ok    bool
+	}{
+		{"0", 0, true}, {"10", 10, true}, {"4294967294", 4294967294, true},
+		{"4294967295", 0, false}, {"01", 0, false}, {"-1", 0, false}, {"", 0, false}, {"a", 0, false}, {"12345678901", 0, false},
+	} {
+		if i, ok := jsArrayIndex(c.label); i != c.index || ok != c.ok {
+			t.Errorf("jsArrayIndex(%q) = %d, %v; want %d, %v", c.label, i, ok, c.index, c.ok)
+		}
+	}
+	backlink := func(n string) string {
+		return "<a href=\"#fnref" + n + "\" role=\"doc-backlink\">↩︎</a>"
+	}
+	cases := []struct{ name, input, want string }{
+		{"unreferenced definition", "[^n]: note\n\npara\n", "<p>para</p>\n"},
+		{"reference to no definition", "a[^n]\n", "<p>a<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn1\">\n<p>" + backlink("1") + "</p>\n</li>\n</ol>\n</section>\n"},
+		{"endnotes after the document", "[^n]: note\n\n# H\n\na[^n]\n", "<p>a<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn1\">\n<p>note" + backlink("1") + "</p>\n</li>\n</ol>\n</section>\n"},
+	}
+	cases[2].want = "<section id=\"H\">\n<h1>H</h1>\n" + cases[2].want[:strings.Index(cases[2].want, "<section role")] + "</section>\n" + cases[2].want[strings.Index(cases[2].want, "<section role"):]
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := HTML(Parse([]byte(c.input)))

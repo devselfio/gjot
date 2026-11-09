@@ -33,6 +33,7 @@ func HTML(doc *Node, opts ...HTMLOption) ([]byte, error) {
 		o(r)
 	}
 	r.render(doc)
+	r.endnotes()
 	if r.err != nil {
 		return nil, r.err
 	}

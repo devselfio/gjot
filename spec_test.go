@@ -125,10 +125,8 @@ func checkCase(c specCase) error {
 	return nil
 }
 
-// TestSpec runs every case of testdata/spec/*.test through checkCase and
-// judges it against the known-failures list: a listed case must fail, an
-// unlisted one must pass, and every entry must name a case. It logs the pass
-// count out of the total.
+// TestSpec runs every case of testdata/spec/*.test through checkCase; a
+// failing case fails its subtest. It logs the pass count out of the total.
 func TestSpec(t *testing.T) {
 	files, err := filepath.Glob("testdata/spec/*.test")
 	if err != nil {
@@ -137,14 +135,9 @@ func TestSpec(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no testdata/spec/*.test files found")
 	}
-	known := loadKnownFailures(t)
-	// corpus holds every non-filter case of every file. It is filled here,
-	// outside the subtests, so a -run filter does not shrink it and make
-	// real entries look stale.
-	corpus := make(map[caseID]bool)
-	// total and the other counters are only bumped inside subtests that
-	// run, so under -run the count line describes the cases selected.
-	var total, passing, knownFailing, skipped int
+	// The counters are only bumped inside subtests that run, so under -run
+	// the count line describes the cases selected.
+	var total, passing, skipped int
 	for _, file := range files {
 		base := filepath.Base(file)
 		content, err := os.ReadFile(file)
@@ -152,11 +145,6 @@ func TestSpec(t *testing.T) {
 			t.Fatal(err)
 		}
 		cases := parseSpecFile(string(content))
-		for _, c := range cases {
-			if !c.filter {
-				corpus[caseID{base, c.line}] = true
-			}
-		}
 		t.Run(strings.TrimSuffix(base, ".test"), func(t *testing.T) {
 			for _, c := range cases {
 				t.Run(fmt.Sprintf("L%d", c.line), func(t *testing.T) {
@@ -165,26 +153,14 @@ func TestSpec(t *testing.T) {
 						skipped++
 						t.Skip("lua filter")
 					}
-					id := caseID{base, c.line}
-					err := checkCase(c)
-					switch classify(known[id], err) {
-					case passed:
-						passing++
-					case knownFailure:
-						knownFailing++
-						t.Skipf("known failure (%s in %s): %v", id, knownFailuresPath, err)
-					case unexpectedPass:
-						t.Errorf("%s passes; delete the entry %q from %s", id, id, knownFailuresPath)
-					case unexpectedFailure:
-						t.Errorf("%s fails and is not listed; add the entry %q to %s\n%v", id, id, knownFailuresPath, err)
+					if err := checkCase(c); err != nil {
+						t.Error(err)
+						return
 					}
+					passing++
 				})
 			}
 		})
 	}
-	for _, id := range staleEntries(known, corpus) {
-		t.Errorf("%s names no case; delete it from %s", id, knownFailuresPath)
-	}
-	t.Logf("corpus: %d of %d cases pass, %d known failing, %d skipped (lua filter)",
-		passing, total, knownFailing, skipped)
+	t.Logf("corpus: %d of %d cases pass, %d skipped (lua filter)", passing, total, skipped)
 }

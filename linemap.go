@@ -4,6 +4,10 @@ package gjot
 // Built when a paragraph's lines are joined for inline parsing.
 type lineMap struct {
 	segments []lineSegment
+	// total is the joined text's length: the offset of the newline that
+	// would follow the last line, where a hard break ending the leaf
+	// stands.
+	total int
 }
 
 // lineSegment is one source line's slice of the joined text: where it
@@ -20,7 +24,8 @@ type lineSegment struct {
 // newline, as zjot reports it, even when a source line with no slice (a
 // heading's bare marker line) stands between the two. This relies on
 // parseParagraph joining lines with exactly one "\n" byte: the byte just
-// before a segment's joinedStart is taken to be that newline.
+// before a segment's joinedStart is taken to be that newline. The offset
+// one past the joined text (total) is the last line's newline.
 func (m lineMap) resolve(joinedOffset int) SourcePos {
 	if len(m.segments) == 0 {
 		return SourcePos{Line: 1, Col: 1, Offset: joinedOffset}
@@ -34,7 +39,7 @@ func (m lineMap) resolve(joinedOffset int) SourcePos {
 	}
 	seg := m.segments[best]
 	delta := joinedOffset - seg.joinedStart
-	if best+1 < len(m.segments) && joinedOffset == m.segments[best+1].joinedStart-1 {
+	if best+1 < len(m.segments) && joinedOffset == m.segments[best+1].joinedStart-1 || joinedOffset == m.total {
 		return seg.eol
 	}
 	return SourcePos{Line: seg.orig.Line, Col: seg.orig.Col + delta, Offset: seg.orig.Offset + delta}

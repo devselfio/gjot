@@ -87,15 +87,15 @@ func TestHookErrorAbortsRender(t *testing.T) {
 func TestNodeHasClassAndAttr(t *testing.T) {
 	doc := Parse([]byte("{#id .a .b k=v}\n::: c\n:::\n"))
 	div := doc.Children[0]
-	for _, c := range []string{"a", "b"} {
+	// The fence class joins the block attribute's classes, as djot.js
+	// (zjot.test L6431), so every one of them is found.
+	for _, c := range []string{"a", "b", "c"} {
 		if !div.HasClass(c) {
 			t.Errorf("HasClass(%q) = false", c)
 		}
 	}
-	// A "class" attribute replaces the fence class in the output, so it
-	// replaces it for lookup too.
-	if div.HasClass("c") {
-		t.Error("HasClass(\"c\") = true for a fence class overridden by .a .b")
+	if div.HasClass("d") {
+		t.Error("HasClass(\"d\") = true for a class the div has not")
 	}
 	if got := div.Attr("k"); got != "v" {
 		t.Errorf("Attr(k) = %q, want v", got)

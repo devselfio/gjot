@@ -104,6 +104,24 @@ type Range struct {
 // Node is one element of the Djot AST. The document root is a Section with
 // Level 0. String fields are "" when absent; Destination is nil when a link
 // has no destination, since an empty destination ("[a]()") renders href="".
+// A list's Style is djot.js's: the bullet of a bullet or task list, and for
+// an ordered list the style it settled on in its delimiter ("1.", "(a)",
+// "I)"); an ordered list's Text is its first marker's text ("3", "iv"),
+// from which its start is read.
+//
+// Attrs holds every attribute as djot.js's attribute object holds them, in
+// source order: an id written in the source is its "id" entry (an empty
+// `id=""` included, which renders and names nothing), the classes are one
+// "class" entry (a div's fence class joined to them), and a key keeps its
+// first position with its last value. ID is the id the document gave the
+// node: the non-empty written id, or a heading's generated one (AutoID).
+// Renderers write a written id where it stands and an unwritten ID first; a
+// footnote reference's HTML writes its fnrefN only and drops a written id
+// (zjot.test difference 3). A footnote reference's Text is its label, as is
+// a Footnote's (a definition, standing after the document's blocks); the HTML
+// renderer numbers them. Parse never
+// sets Classes; renderers read it as the class list of a node built without
+// a "class" entry.
 type Node struct {
 	Tag         Tag       `json:"tag"`
 	Children    []*Node   `json:"children,omitempty"`
@@ -142,15 +160,29 @@ type Node struct {
 // parsed from; end == 0 means the node has none.
 type srcSpan struct{ start, end int }
 
-// classList is the classes the node renders with: a "class" attribute
-// replaces the Classes field, as it does in the HTML output.
-func (n *Node) classList() []string {
+// renderedAttrs is the attribute list renderers read: Attrs, with Classes
+// as its "class" entry when Attrs has none.
+func (n *Node) renderedAttrs() []Attr {
+	if n.Classes == "" || hasKey(n.Attrs, "class") {
+		return n.Attrs
+	}
+	return append(append([]Attr{}, n.Attrs...), Attr{"class", n.Classes})
+}
+
+// writtenID is the id written on the node and whether one was, an empty
+// `id=""` included.
+func (n *Node) writtenID() (string, bool) {
 	for _, a := range n.Attrs {
-		if a.Key == "class" {
-			return strings.Fields(a.Value)
+		if a.Key == "id" {
+			return a.Value, true
 		}
 	}
-	return strings.Fields(n.Classes)
+	return "", false
+}
+
+// classList is the classes the node renders with.
+func (n *Node) classList() []string {
+	return strings.Fields(valueOf(n.renderedAttrs(), "class"))
 }
 
 // HasClass reports whether class is among the node's rendered classes.
