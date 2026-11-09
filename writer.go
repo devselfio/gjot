@@ -855,11 +855,21 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 			marked := inRun != "" && strings.IndexByte(markedDelims, inRun[0]) >= 0 && kinds[i+1] != kindStart &&
 				!(i == 0 && w.prev() == '`' && inRun[0] == '=')
 			if marked {
+				if i == 0 && w.lineStart && w.attrsCouldClose(tail, next) {
+					// At a line's start the line could read as a block
+					// attribute ("_" and "-" are key bytes): both bytes are
+					// escaped, so that the delimiter does not pair with a
+					// later node's.
+					b.WriteByte('\\')
+					b.WriteByte(c)
+					b.WriteByte('\\')
+					b.WriteByte(inRun[0])
+					i++
+					continue
+				}
 				// Inside a marked pair of the same delimiter, a raw marked
-				// opener would take the pair's closer; at a line's start a
-				// run that has not failed as an attribute by its end could
-				// read as a block attribute ("_" and "-" are key bytes).
-				escape = i == 0 && w.lineStart && attrOpen(text) || braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
+				// opener would take the pair's closer.
+				escape = braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
 				if !escape {
 					w.openMarked[inRun[0]]++
 					b.WriteByte(c)
@@ -1054,15 +1064,19 @@ func braceOpensMarkup(tail string, run int) bool {
 // attrsCouldClose reports whether a raw brace followed by tail (the rest
 // of its run and what follows the run) could read as an attribute closed
 // by a "}" written later (an attribute set, a braced pair, a kept
-// boundary): the attribute parser has not failed by the end of tail (a
-// brace before a node whose first bytes are unknown is taken to). No "}"
-// comes after a leaf's last run, unless it ends in a space, which
-// leafLines keeps with an empty attribute.
+// boundary): the attribute is complete within tail, or the attribute
+// parser has not failed by the end of tail (a brace before a node whose
+// first bytes are unknown is taken to). No "}" comes after a leaf's last
+// run, unless it ends in a space, which leafLines keeps with an empty
+// attribute.
 func (w *inlineWriter) attrsCouldClose(tail string, next *Node) bool {
-	if next == nil && w.closer == "" && !strings.HasSuffix(tail, " ") {
+	switch feedAttr("{" + tail) {
+	case attrDone:
+		return true
+	case attrFail:
 		return false
 	}
-	return attrOpen("{" + tail)
+	return next != nil || w.closer != "" || strings.HasSuffix(tail, " ")
 }
 
 // bracketCloses reports whether a raw "]" followed by tail would close an

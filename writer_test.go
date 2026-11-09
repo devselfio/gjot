@@ -268,9 +268,12 @@ func TestWriterTextEscapes(t *testing.T) {
 		{"quoted-value-before-soft-break", "x {k=\"v\"\n%\\+\n", "x \\{k=\"v\"\n%{}+\n", true},
 		// At a line's start a marked opener's brace is escaped: the line
 		// could read as a block attribute.
-		{"marked-opener-at-line-start", "\\{-k=v}\nb\n", "\\{-k=v}\nb\n", false},
-		{"marked-opener-at-item-start", "- \\{_a=b}\n", "- \\{_a=b}\n", false},
-		{"marked-opener-at-line-start-from-comment", "{-k=v}{%c%}\n", "\\{-k=v}\n", false},
+		{"marked-opener-at-line-start", "\\{-k=v}\nb\n", "\\{\\-k=v}\nb\n", true},
+		{"marked-opener-at-item-start", "- \\{_a=b}\n", "- \\{\\_a=b}\n", true},
+		{"marked-opener-at-line-start-from-comment", "{-k=v}{%c%}\n", "\\{\\-k=v}\n", true},
+		{"marked-opener-at-line-start-then-pair", "{_k=v}_a_\n", "\\{\\_k=v}_a_\n", true},
+		{"marked-opener-at-line-start-not-attribute", "{_*_a_*\n", "{_*_a_*\n", false},
+		{"marked-opener-alone-on-line", "{_b_\n", "{_b_\n", false},
 		{"raw-format-after-verbatim-is-text", "x `a`\\{=html} y\n", "x `a`\\{=html} y\n", false},
 		{"brace-then-escaped-delimiter", "{\\_\n", "\\{\\_\n", false},
 		{"bracket-before-boundary-attribute", "+][ ]'\n", "\\+][ \\]{}\u2019\n", true},

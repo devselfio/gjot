@@ -454,12 +454,11 @@ func (p *attrParser) feedLine(line string) (attrStatus, int) {
 // overrides an id waiting before it, which was registered all the same.
 func (p *attrParser) writesID() bool { return p.idWritten }
 
-// attrOpen reports whether src, starting with '{', has not failed as an
-// attribute by its last byte: it is done or still open, so a "}" after it
-// could close it.
-func attrOpen(src string) bool {
+// feedAttr is the attribute parser's status after src, which starts with
+// '{': done, failed, or still open at its last byte.
+func feedAttr(src string) attrStatus {
 	status, _ := newAttrParser(src).feed(0, len(src)-1)
-	return status != attrFail
+	return status
 }
 
 // opensAttr reports whether line, a block attribute's first line, leaves the
