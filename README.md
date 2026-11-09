@@ -74,13 +74,23 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 
 | Function | Description |
 | --- | --- |
-| `Parse(src []byte, opts ...ParseOption) *Node` | Parse Djot into an AST. Never fails: every input is a document |
+| `Parse(src []byte, opts ...ParseOption) *Node` | Parse Djot into an AST. Never fails: every input is a document. Blocks nest at most `MaxNesting` (1,000) containers deep and a leaf's inlines at most `MaxNesting` deep; a marker that would nest deeper is text |
+| `ParseErr(src []byte, opts ...ParseOption) (*Node, error)` | `Parse` that also returns `ErrTooDeep` when the limit stopped nesting; the tree is the same |
 | `WithSourcePos() ParseOption` | Record each node's source range in `Node.Pos` |
 | `HTML(doc *Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
 | `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h`; `WalkSkipChildren` drops the default child rendering |
 | `ASTText(doc *Node) []byte` | Render the AST in djot.js's indented text format |
 | `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
 | `(*Node).HasClass(string) bool`, `(*Node).Attr(string) string` | Class and attribute lookup for hooks |
+
+The nesting limit bounds the tree: it is never deeper than about twice
+`MaxNesting` plus a few levels for leaves, table rows and sections, which
+`HTML`, `ASTText`, `Djot` and `encoding/json` all recurse through safely, so
+untrusted input cannot exhaust the stack. A block quote, div, list, list item
+or footnote counts one container (a list and its item two), as does a leaf
+block other than a paragraph. Where zjot returns `error.TooDeep` and no
+document, gjot returns the tree; check `errors.Is(err, gjot.ErrTooDeep)` from
+`ParseErr` to reject or flag such input.
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the
@@ -145,7 +155,7 @@ are registered where they stand; references, footnotes and sections are resolved
 after the pass.
 
 ```
-gjot.go          Public API: Parse, WithSourcePos, HTML
+gjot.go          Public API: Parse, ParseErr, MaxNesting, WithSourcePos, HTML
 node.go          AST types (Node, Tag, Attr, SourcePos, Range) and hook helpers
 parser.go        Block parsing: the container stack over lines
 leaf.go          What one line says (fences, markers, table rows, ...)
