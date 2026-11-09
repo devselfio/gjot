@@ -111,25 +111,13 @@ push to `main` and every pull request. `make help` lists the targets.
 
 `TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
 of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
-and `zjot.test`), vendored byte for byte and pinned in
+and `zjot.test`), 1066 cases vendored byte for byte and pinned in
 `testdata/spec/ORIGIN.md`. Each case must render its expected output, and must
 render it again after being written back to Djot by `Djot` and re-parsed (for
-AST cases, the AST must not change). The 3 cases of `filters.test` skip because
-they need a Lua filter.
+AST cases, the AST must not change); a failing case fails the run. The 3 cases
+of `filters.test` skip because they need a Lua filter.
 
-`testdata/spec/known-failures.txt` lists the cases gjot does not yet pass, one
-per line as `<file>.test L<line>`, the line being that of the case's opening
-fence (e.g. `zjot.test L1234`), sorted by file then line; `#` comments and blank
-lines are allowed. Against that list:
-
-- a listed case that fails is reported as a known failure (a skipped subtest
-  with the entry and the diff) and does not fail the run;
-- a listed case that passes fails the run, naming the entry to delete;
-- an unlisted case that fails fails the run, naming the entry it would need;
-- an entry that names no case fails the run.
-
-The list only shrinks. The pass count is what the run prints, not a number kept
-here:
+The pass count is what the run prints, not a number kept here:
 
 ```
 make spec-count
@@ -168,7 +156,7 @@ linemap.go       Source position mapping for joined inline text
 html.go          HTML renderer and the class hook
 ast.go           AST text renderer
 writer.go        Djot writer
-spec_test.go     Corpus runner, judged against testdata/spec/known-failures.txt
+spec_test.go     Corpus runner over testdata/spec/*.test
 cmd/gjot         CLI
 cmd/driftcheck   Corpus drift check against zjot
 ```

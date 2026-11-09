@@ -19,7 +19,4 @@ nothing is written:
 
     go run ./cmd/driftcheck main
 
-`known-failures.txt` beside the corpus lists the cases gjot does not yet
-pass and is read by `TestSpec`; see the README.
-
 `filters.test` needs a Lua filter and its cases are skipped by the runner.
