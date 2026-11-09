@@ -86,3 +86,46 @@ func TestWriterRestoresReferenceDefinitions(t *testing.T) {
 		t.Errorf("ast\n got %s\nwant %s", got, want)
 	}
 }
+
+func TestWriterApostrophe(t *testing.T) {
+	src := "# Don't panic\n"
+	want, err := HTML(Parse([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	djot, got := roundTrip(t, src)
+	if djot != src {
+		t.Errorf("%q written as %q", src, djot)
+	}
+	if got != string(want) {
+		t.Errorf("%q\n---want---\n%s---got---\n%s", src, want, got)
+	}
+	for _, src := range []string{
+		"{'don't'}\n",
+		"'tis and don't\n",
+		// An apostrophe inside a quote in a heading keeps the heading's id.
+		"# {'don't'}\n\n[don't][]\n",
+		"# 'a don't b'\n\n[a don't b][]\n",
+		// Brackets inside a quote: a ' written there must not close it.
+		"{'a [b's](u) c'}\n",
+		"'a [b’s]{.k} c'\n",
+		"'a ![b’s](u) c'\n",
+		"'a \"b [c's](u)\" d'\n",
+		// After a non-ASCII letter, a digit or an underscore.
+		"# café's\n\n[café's][]\n",
+		"# x_'s\n\n[x_'s][]\n",
+		"# 1's\n",
+		// A ’ typed as the glyph is written as the glyph, so ids and alt text
+		// that read it keep it.
+		"# b’s\n\n[b’s][]\n",
+		"![b’s](u)\n",
+	} {
+		want, err := HTML(Parse([]byte(src)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if djot, got := roundTrip(t, src); got != string(want) {
+			t.Errorf("%q\n---written---\n%s---want---\n%s---got---\n%s", src, djot, want, got)
+		}
+	}
+}
