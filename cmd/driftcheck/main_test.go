@@ -155,6 +155,28 @@ func TestParseOriginRealFile(t *testing.T) {
 	}
 }
 
+// TestWorkflowRunsDriftcheck keeps the drift check in CI: the check job
+// must run make spec-drift after make spec-count. A plain string search,
+// since gjot has no YAML dependency.
+func TestWorkflowRunsDriftcheck(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	count := strings.Index(s, "run: make spec-count")
+	if count < 0 {
+		t.Fatal(`"run: make spec-count" not found in .github/workflows/ci.yml`)
+	}
+	drift := strings.Index(s, "run: make spec-drift")
+	if drift < 0 {
+		t.Fatal(`"run: make spec-drift" not found in .github/workflows/ci.yml`)
+	}
+	if drift < count {
+		t.Fatal(`"run: make spec-drift" comes before "run: make spec-count" in .github/workflows/ci.yml`)
+	}
+}
+
 func TestParseOriginErrors(t *testing.T) {
 	cases := []struct{ name, in, key string }{
 		{"missing ref", "Repository: http://x\n", "Ref"},
