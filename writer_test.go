@@ -393,7 +393,7 @@ func TestWriterAttributeOrderAndEmptyID(t *testing.T) {
 		{"{.y k=v}\n:::\nz\n:::\n", "{.y k=\"v\"}\n:::\nz\n:::\n"},
 		{"{.y}\n{k=v}\n::: w\nz\n:::\n", "{.y .w k=\"v\"}\n:::\nz\n:::\n"},
 		{"$`m`{#i .a k=v} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n", "$`m`{#i .a k=\"v\"} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n"},
-		{"x[^n]{.a}\n\n[^n]: n\n", "x[^1]{.a}\n\n[^1]: n\n"},
+		{"x[^n]{.a}\n\n[^n]: n\n", "x[^n]{.a}\n\n[^n]: n\n"},
 	}
 	for _, c := range cases {
 		djot, html := roundTrip(t, c.input)
@@ -461,5 +461,25 @@ func TestWriterBlanksOnlyLine(t *testing.T) {
 				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
 			}
 		})
+	}
+}
+
+// Footnotes are written with their labels, the definition's content indented
+// under its marker's width so a code block keeps its indentation relative to
+// the fence (zjot.test L1845, L1867); each reads back to the same HTML.
+func TestWriterFootnotes(t *testing.T) {
+	cases := []struct{ input, want string }{
+		{"x[^note]\n\n[^note]: n\n", "x[^note]\n\n[^note]: n\n"},
+		{"[^n]:\n    ```\n      x\n    ```\n\nx[^n]\n", "x[^n]\n\n[^n]: ```\n        x\n      ```\n"},
+		{"> a[^x]\n>\n> [^x]: in quote\n", "> a[^x]\n\n[^x]: in quote\n"},
+	}
+	for _, c := range cases {
+		djot, html := roundTrip(t, c.input)
+		if djot != c.want {
+			t.Errorf("Djot(%q) = %q, want %q", c.input, djot, c.want)
+		}
+		if want := htmlOf(t, c.input); html != want {
+			t.Errorf("round trip of %q: HTML %q, want %q", c.input, html, want)
+		}
 	}
 }

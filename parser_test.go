@@ -499,3 +499,26 @@ func TestOrderedListNode(t *testing.T) {
 		t.Errorf("AST text:\n---got---\n%s---want---\n%s", got, want)
 	}
 }
+
+// Footnote definitions stand in the tree after the document's blocks as
+// `footnote` nodes with their label, in the order they first closed; a label
+// defined again keeps its place with its new content; a reference keeps its
+// normalized label, numbered only when rendered (grid.test L1311, L1628).
+func TestFootnoteDefinitionsInTree(t *testing.T) {
+	doc := Parse([]byte("use[^a  b]\n\n[^x]: one\n\n[^y]: two\n\n[^x]: three\n"))
+	var got []string
+	for _, b := range doc.Children {
+		switch b.Tag {
+		case Footnote:
+			got = append(got, "footnote "+b.Text+"="+b.Children[0].Children[0].Text)
+		case Para:
+			got = append(got, "para ref="+b.Children[1].Text)
+		default:
+			got = append(got, string(b.Tag))
+		}
+	}
+	want := []string{"para ref=a b", "footnote x=three", "footnote y=two"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("blocks = %v, want %v", got, want)
+	}
+}

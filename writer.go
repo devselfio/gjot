@@ -9,8 +9,8 @@ import (
 
 // Djot writes doc back as Djot source. The result re-parses to the same
 // HTML and AST (positions aside); it is not the original text. Reference
-// definitions are written as inline destinations and footnotes are renumbered
-// in order of first reference.
+// definitions are written as inline destinations and footnote definitions
+// after the document, with their labels.
 func Djot(doc *Node) []byte {
 	d := &djotWriter{}
 	lines := d.blocks(doc.Children)
@@ -87,13 +87,13 @@ func (d *djotWriter) block(n *Node) []string {
 			lines = append(lines, a)
 		}
 		return append(lines, d.blocks(n.Children)...)
-	case Footnote:
-		return d.footnotes(n)
 	}
 	if a := attrSet(n); a != "" {
 		lines = append(lines, a)
 	}
 	switch n.Tag {
+	case Footnote:
+		return append(lines, d.footnote(n)...)
 	case OrderedList:
 		return append(lines, d.orderedList(n)...)
 	case Para:
@@ -366,40 +366,17 @@ func separatorLine(row *Node) string {
 	return "|" + strings.Join(cells, "|") + "|"
 }
 
-// writeFootnotes writes the endnotes section back as definitions, numbered
-// as the references are, without the generated backlinks.
-func (d *djotWriter) footnotes(section *Node) []string {
-	var lines []string
-	for i, item := range section.Children {
-		if i > 0 {
-			lines = append(lines, "")
-		}
-		blocks := withoutBacklink(item.Children)
-		marker := "[^" + strconv.Itoa(i+1) + "]: "
-		if len(blocks) == 0 {
-			lines = append(lines, marker)
-			continue
-		}
-		lines = append(lines, indented(d.blocks(blocks), marker, "    ", "")...)
+// footnote writes a footnote definition under its label, the content
+// indented by the marker's width so a code block keeps its indentation
+// relative to its fence (the footnote's lines need only be indented past
+// the label's).
+func (d *djotWriter) footnote(n *Node) []string {
+	marker := "[^" + n.Text + "]:"
+	inner := d.blocks(n.Children)
+	if len(inner) == 0 {
+		return []string{marker}
 	}
-	return lines
-}
-
-func withoutBacklink(blocks []*Node) []*Node {
-	n := len(blocks)
-	if n == 0 || blocks[n-1].Tag != Para {
-		return blocks
-	}
-	last := blocks[n-1]
-	kids := last.Children
-	if k := len(kids); k > 0 && kids[k-1].Tag == Link && kids[k-1].Attr("role") == "doc-backlink" {
-		kids = kids[:k-1]
-	}
-	if len(kids) == 0 {
-		return blocks[:n-1]
-	}
-	out := append([]*Node{}, blocks[:n-1]...)
-	return append(out, &Node{Tag: Para, Children: kids})
+	return indented(inner, marker+" ", strings.Repeat(" ", len(marker)+1), "")
 }
 
 // attrSet writes a node's attributes as `{#id .c k="v"}`, or "" when it has
@@ -800,7 +777,7 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		w.write("<" + n.Text + ">")
 		w.attrs(n)
 	case FootnoteReference:
-		// Its ID is the renderer's fnrefN, not written; its attributes are.
+		// Its label; a written id is dropped, as the HTML drops it.
 		w.write("[^" + n.Text + "]")
 		w.write(attrSet(&Node{Tag: FootnoteReference, Attrs: n.Attrs}))
 	case Symb:

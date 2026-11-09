@@ -1079,7 +1079,7 @@ func (p *stackParser) close(s stand) {
 			def.pos = &Range{Start: c.start, End: s.pos}
 		}
 		*slot = nil
-		p.doc.defs.footnoteDefs[c.data.label] = def
+		p.doc.defs.defineFootnote(c.data.label, def)
 		return
 	case kindDiv:
 		end := s.pos

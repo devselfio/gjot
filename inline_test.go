@@ -182,8 +182,6 @@ func inlineText(nodes []*Node) string {
 }
 
 func TestStringContent(t *testing.T) {
-	// The inline tree before resolution, which replaces a footnote
-	// reference's label with its number.
 	nodes, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true)
 	for _, tt := range []struct {
 		labels bool

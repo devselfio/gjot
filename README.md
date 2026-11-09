@@ -79,7 +79,7 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 | `HTML(doc *Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
 | `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h`; `WalkSkipChildren` drops the default child rendering |
 | `ASTText(doc *Node) []byte` | Render the AST in djot.js's indented text format |
-| `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnotes are renumbered |
+| `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
 | `(*Node).HasClass(string) bool`, `(*Node).Attr(string) string` | Class and attribute lookup for hooks |
 
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
@@ -90,8 +90,9 @@ djot.js's style in `"style"` (`"1."`, `"(a)"`, `"I)"`) and its first marker's
 text in `"text"`, from which the HTML `start` is read. Source positions are kept only
 when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
 the inline nodes inside them. A definition list item's term and definition
-carry none, as zjot's AST prints none; the footnote section built at the end
-does not yet.
+carry none, as zjot's AST prints none. Footnote definitions stand after the
+document's blocks as `footnote` nodes with their label in `"text"`; the HTML
+renderer numbers the endnotes from them.
 
 One thing the writer cannot express, because the syntax has no form for it: an
 empty verbatim or math span in the middle of a paragraph (it is written as a

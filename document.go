@@ -29,10 +29,22 @@ type footnoteDef struct {
 }
 
 // definitions holds the reference and footnote definitions by normalized
-// label. A label defined again replaces the earlier definition (djot.js).
+// label. A label defined again replaces the earlier definition (djot.js) and
+// keeps its place in footnoteLabels, the labels in the order they first
+// closed (nested definitions inner first), which is the order the tree
+// holds the footnotes in.
 type definitions struct {
-	refDefs      map[string]refDefinition
-	footnoteDefs map[string]*footnoteDef
+	refDefs        map[string]refDefinition
+	footnoteDefs   map[string]*footnoteDef
+	footnoteLabels []string
+}
+
+// defineFootnote records label's standing definition.
+func (d *definitions) defineFootnote(label string, def *footnoteDef) {
+	if _, seen := d.footnoteDefs[label]; !seen {
+		d.footnoteLabels = append(d.footnoteLabels, label)
+	}
+	d.footnoteDefs[label] = def
 }
 
 // ids is every id in the document as the stack reads it: explicit ones
@@ -136,10 +148,9 @@ func (t *ids) heading(n *Node, explicit string) {
 
 // document is the state the stack shares across every block it builds.
 type document struct {
-	defs          definitions
-	ids           ids
-	footnoteOrder []string
-	trackPos      bool
+	defs     definitions
+	ids      ids
+	trackPos bool
 }
 
 func newDocument(trackPos bool) *document {
@@ -155,16 +166,32 @@ func newDocument(trackPos bool) *document {
 }
 
 // finish builds the root from the top-level blocks once every definition is
-// known: sections, then references, then the footnote section. end is where
-// a section still open at the end ends (zjot Sections: the last block's end,
-// or the input's when lines follow it).
+// known: sections, then the footnote definitions after them, then
+// references. end is where a section still open at the end ends (zjot
+// Sections: the last block's end, or the input's when lines follow it).
 func (d *document) finish(blocks []*Node, end *SourcePos) *Node {
 	blocks = d.sections(blocks, end)
+	blocks = append(blocks, d.footnotes()...)
 	d.resolve(blocks)
-	if len(d.footnoteOrder) > 0 {
-		blocks = append(blocks, d.footnoteSection())
-	}
 	return &Node{Tag: Section, Children: blocks}
+}
+
+// footnotes is every footnote definition as a Footnote node, as djot.js's
+// JSON holds them and zjot's AST prints them: its label in Text, its blocks
+// as children, its span, and the block attributes written before it; in
+// the order the labels first closed. The HTML renderer numbers the endnotes
+// from these where the body references them.
+func (d *document) footnotes() []*Node {
+	var nodes []*Node
+	for _, label := range d.defs.footnoteLabels {
+		def := d.defs.footnoteDefs[label]
+		n := &Node{Tag: Footnote, Text: label, Children: def.blocks, Pos: def.pos}
+		if def.attrs != nil {
+			applyBlockAttrs(n, *def.attrs)
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes
 }
 
 // sections nests the top-level blocks by heading level (zjot Sections.feed):
@@ -230,15 +257,12 @@ func (d *document) sections(blocks []*Node, end *SourcePos) []*Node {
 }
 
 // resolve fills in reference links and images from the definitions, else
-// from a heading's implicit reference, and numbers footnote references in
-// order of first use. Nodes are updated in place.
+// from a heading's implicit reference. Nodes are updated in place.
 func (d *document) resolve(nodes []*Node) {
 	for _, n := range nodes {
 		if (n.Tag == Link || n.Tag == Image) && n.Destination == nil {
 			raw := n.Reference
 			if raw == "" {
-				// Children are resolved after n, so a footnote reference in
-				// the text still holds its label here.
 				raw = stringContent(n.Children, true)
 			}
 			label := normalizeLabel(raw)
@@ -254,51 +278,6 @@ func (d *document) resolve(nodes []*Node) {
 				n.Destination = &dest
 			}
 		}
-		if n.Tag == FootnoteReference {
-			num := d.footnoteNumber(normalizeLabel(n.Text))
-			n.Text = strconv.Itoa(num)
-			n.ID = "fnref" + strconv.Itoa(num)
-			dest := "#fn" + strconv.Itoa(num)
-			n.Destination = &dest
-		}
 		d.resolve(n.Children)
 	}
-}
-
-func (d *document) footnoteNumber(label string) int {
-	for i, existing := range d.footnoteOrder {
-		if existing == label {
-			return i + 1
-		}
-	}
-	d.footnoteOrder = append(d.footnoteOrder, label)
-	return len(d.footnoteOrder)
-}
-
-// footnoteSection is the endnotes, in order of first reference, each with a
-// backlink after its last paragraph, as today's tree has them. The block
-// attributes written before a definition are kept with it (footnoteDef) but
-// not put on the endnote: neither djot.js's HTML nor zjot's renders them.
-func (d *document) footnoteSection() *Node {
-	var items []*Node
-	// footnoteOrder can grow while resolving a note that references another.
-	for i := 0; i < len(d.footnoteOrder); i++ {
-		label := d.footnoteOrder[i]
-		var content []*Node
-		if def := d.defs.footnoteDefs[label]; def != nil {
-			content = def.blocks
-		}
-		d.resolve(content)
-		num := strconv.Itoa(len(items) + 1)
-		backref := "#fnref" + num
-		backlink := &Node{Tag: Link, Destination: &backref, Text: "↩︎", Attrs: []Attr{{"role", "doc-backlink"}}}
-		if n := len(content); n > 0 && content[n-1].Tag == Para {
-			last := content[n-1]
-			last.Children = append(last.Children, backlink)
-		} else {
-			content = append(content, &Node{Tag: Para, Children: []*Node{backlink}})
-		}
-		items = append(items, &Node{Tag: ListItem, ID: "fn" + num, Children: content})
-	}
-	return &Node{Tag: Footnote, Children: items, Attrs: []Attr{{"role", "doc-endnotes"}}}
 }

@@ -1,6 +1,9 @@
 package gjot
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A tight bullet, ordered or task list renders every paragraph inside its
 // items bare, however deep in block quotes, divs and definition lists, as
@@ -130,6 +133,47 @@ func TestAttributeOrder(t *testing.T) {
 		{"div fence class joins last", "{.x}\n::: y\nz\n:::\n", "<div class=\"x y\">\n<p>z</p>\n</div>\n"},
 		{"an id an empty id overrides was read", "[a]{#y}{id=\"\"}\n\n# y\n", "<p><span id=\"\">a</span></p>\n<section id=\"y-1\">\n<h1>y</h1>\n</section>\n"},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}
+
+// Endnotes are numbered as djot.js's HTML renderer numbers them: body
+// references in reading order, then every definition's references in
+// JavaScript's key order, array-index labels ascending first (zjot.test
+// L10160, L10192). A definition nothing references renders nothing; a
+// reference to no definition gets an endnote with only its backlink; the
+// endnotes follow the whole document, not the definition's place.
+func TestFootnoteEndnotes(t *testing.T) {
+	for _, c := range []struct {
+		label string
+		index int
+		ok    bool
+	}{
+		{"0", 0, true}, {"10", 10, true}, {"4294967294", 4294967294, true},
+		{"4294967295", 0, false}, {"01", 0, false}, {"-1", 0, false}, {"", 0, false}, {"a", 0, false}, {"12345678901", 0, false},
+	} {
+		if i, ok := jsArrayIndex(c.label); i != c.index || ok != c.ok {
+			t.Errorf("jsArrayIndex(%q) = %d, %v; want %d, %v", c.label, i, ok, c.index, c.ok)
+		}
+	}
+	backlink := func(n string) string {
+		return "<a href=\"#fnref" + n + "\" role=\"doc-backlink\">↩︎</a>"
+	}
+	cases := []struct{ name, input, want string }{
+		{"unreferenced definition", "[^n]: note\n\npara\n", "<p>para</p>\n"},
+		{"reference to no definition", "a[^n]\n", "<p>a<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn1\">\n<p>" + backlink("1") + "</p>\n</li>\n</ol>\n</section>\n"},
+		{"endnotes after the document", "[^n]: note\n\n# H\n\na[^n]\n", "<p>a<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a></p>\n<section role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn1\">\n<p>note" + backlink("1") + "</p>\n</li>\n</ol>\n</section>\n"},
+	}
+	cases[2].want = "<section id=\"H\">\n<h1>H</h1>\n" + cases[2].want[:strings.Index(cases[2].want, "<section role")] + "</section>\n" + cases[2].want[strings.Index(cases[2].want, "<section role"):]
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := HTML(Parse([]byte(c.input)))

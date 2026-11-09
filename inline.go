@@ -287,7 +287,7 @@ func (p *inlineParser) parse() []*Node {
 		case '[':
 			p.flushText()
 			if close := p.footnoteRefEnd(p.pos); close >= 0 {
-				p.pushNode(at(&Node{Tag: FootnoteReference, Text: src[p.pos+2 : close]}, p.pos, close+1))
+				p.pushNode(at(&Node{Tag: FootnoteReference, Text: normalizeLabel(src[p.pos+2 : close])}, p.pos, close+1))
 				p.pos = close + 1
 				p.textStart = p.pos
 				continue

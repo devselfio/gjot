@@ -39,6 +39,9 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 	case Heading:
 		out = append(out, " level="...)
 		out = strconv.AppendInt(out, int64(n.Level), 10)
+	case Footnote:
+		out = append(out, " label="...)
+		out = appendQuoted(out, n.Text)
 	case BulletList, OrderedList:
 		out = appendBool(out, " tight=", n.Tight)
 		if n.Style != "" {

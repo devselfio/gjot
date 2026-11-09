@@ -114,10 +114,12 @@ type Range struct {
 // `id=""` included, which renders and names nothing), the classes are one
 // "class" entry (a div's fence class joined to them), and a key keeps its
 // first position with its last value. ID is the id the document gave the
-// node: the non-empty written id, or a heading's generated one (AutoID), or
-// a footnote reference's fnrefN. Renderers write a written id where it
-// stands and an unwritten ID first; a footnote reference's HTML writes its
-// fnrefN only and drops a written id (zjot.test difference 3). Parse never
+// node: the non-empty written id, or a heading's generated one (AutoID).
+// Renderers write a written id where it stands and an unwritten ID first; a
+// footnote reference's HTML writes its fnrefN only and drops a written id
+// (zjot.test difference 3). A footnote reference's Text is its label, as is
+// a Footnote's (a definition, standing after the document's blocks); the HTML
+// renderer numbers them. Parse never
 // sets Classes; renderers read it as the class list of a node built without
 // a "class" entry.
 type Node struct {

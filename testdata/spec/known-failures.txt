@@ -1,31 +1,12 @@
 # One case per line: <file>.test L<line of its opening fence>; sorted by file then line.
 # A listed case must fail; delete its line when it passes. See README.md.
-grid.test L1311
-grid.test L1344
-grid.test L1379
-grid.test L1416
-grid.test L1551
-grid.test L1583
-grid.test L1628
-zjot.test L1845
-zjot.test L1867
 zjot.test L2410
-zjot.test L2458
-zjot.test L6084
-zjot.test L6105
-zjot.test L6124
-zjot.test L6165
-zjot.test L6775
 zjot.test L7030
 zjot.test L7314
-zjot.test L7386
 zjot.test L7722
 zjot.test L7748
-zjot.test L7845
 zjot.test L7861
 zjot.test L7879
-zjot.test L7903
-zjot.test L7914
 zjot.test L7957
 zjot.test L8131
 zjot.test L8154
@@ -52,11 +33,4 @@ zjot.test L8948
 zjot.test L9026
 zjot.test L9045
 zjot.test L9059
-zjot.test L10034
-zjot.test L10061
-zjot.test L10085
-zjot.test L10115
-zjot.test L10160
-zjot.test L10192
 zjot.test L10390
-zjot.test L10964
