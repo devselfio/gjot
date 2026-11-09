@@ -22,6 +22,110 @@ func TestLeafIsBlank(t *testing.T) {
 	}
 }
 
+// TestLeafCarriageReturn pins zjot v2.0.0's leaf.zig rule for a bare '\r':
+// only isBlank counts it as blank; after a block marker only a space, a tab
+// or the line's end may follow, so a '\r' there is an ordinary byte and the
+// block does not start. A '\r' reaches the leaf functions mid-line or at the
+// end of a last line with no '\n'. The .test corpus cannot hold these inputs.
+func TestLeafCarriageReturn(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want int
+	}{{"#\rx", 0}, {"#\r", 0}, {"# \rx", 1}} {
+		if got := headingLevel(tc.line); got != tc.want {
+			t.Errorf("headingLevel(%q) = %d, want %d", tc.line, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{{">\rx", false}, {">\r", false}, {"> \rx", true}} {
+		if got := startsBlockQuote(tc.line); got != tc.want {
+			t.Errorf("startsBlockQuote(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		line string
+		want fenceInfo
+	}{
+		{"```\rx", fenceInfo{length: 3, char: '`', lang: "\rx"}},
+		{"```\r", fenceInfo{length: 3, char: '`', lang: "\r"}},
+	} {
+		if got, ok := isCodeFence(tc.line); !ok || got != tc.want {
+			t.Errorf("isCodeFence(%q) = %#v, %v; want %#v, true", tc.line, got, ok, tc.want)
+		}
+	}
+	for _, line := range []string{"- -\r-", "---\r", "--- \r"} {
+		if isThematicBreak(line) {
+			t.Errorf("isThematicBreak(%q) = true, want false", line)
+		}
+	}
+	if got, ok := isFencedDivStart(":::\rx"); !ok || got != (divInfo{fence: ":::", class: "\rx"}) {
+		t.Errorf("isFencedDivStart(%q) = %#v, %v; want class %q, true", ":::\rx", got, ok, "\rx")
+	}
+	if divClass("\rx") {
+		t.Errorf("divClass(%q) = true, want false", "\rx")
+	}
+	d, ok := parseDefinitionLabel("[^n]:\rx")
+	if want := (definitionLabel{label: "n", rest: "\rx", restCol: 5, isFootnote: true}); !ok || d != want {
+		t.Errorf("parseDefinitionLabel(%q) = %#v, %v; want %#v, true", "[^n]:\rx", d, ok, want)
+	}
+	if d.footnote() || d.refLabel() != "^n" {
+		t.Errorf("[^n]:\\rx: footnote() = %v, refLabel() = %q; want false, %q", d.footnote(), d.refLabel(), "^n")
+	}
+	if d, ok := parseDefinitionLabel("[foo]: \rx"); !ok || !d.spaced {
+		t.Errorf("parseDefinitionLabel(%q) = %#v, %v; want spaced, true", "[foo]: \rx", d, ok)
+	}
+	for _, rest := range []string{"[ ]\rx", "[x]\r"} {
+		if isTaskItem(rest) {
+			t.Errorf("isTaskItem(%q) = true, want false", rest)
+		}
+	}
+	if m, ok := parseBulletMarker("-\rx"); ok {
+		t.Errorf("parseBulletMarker(%q) = %+v, true; want false", "-\rx", m)
+	}
+	if m, ok := parseBulletMarker("- \rx"); !ok || m.rest != "\rx" {
+		t.Errorf("parseBulletMarker(%q) = %+v, %v; want rest %q, true", "- \rx", m, ok, "\rx")
+	}
+	for _, line := range []string{"1.\rx", "(a)\r"} {
+		if m, ok := parseOrderedMarker(line); ok {
+			t.Errorf("parseOrderedMarker(%q) = %+v, true; want false", line, m)
+		}
+	}
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{{"| a |\r", false}, {"| a |", true}} {
+		if got := isTableRow(tc.line); got != tc.want {
+			t.Errorf("isTableRow(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{{"\r", true}, {" \r\t", true}, {"\rx", false}} {
+		if got := isBlank(tc.line); got != tc.want {
+			t.Errorf("isBlank(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+	if !isClosingCodeFence("```\r", fenceInfo{length: 3, char: '`'}) {
+		t.Errorf("isClosingCodeFence(%q) = false, want true", "```\r")
+	}
+	if !closesDiv(":::\r", 3) {
+		t.Errorf("closesDiv(%q, 3) = false, want true", ":::\r")
+	}
+	for _, src := range []string{"#\rx", ">\rx"} {
+		doc := Parse([]byte(src))
+		var tags []Tag
+		for _, c := range doc.Children {
+			tags = append(tags, c.Tag)
+		}
+		if len(tags) != 1 || tags[0] != Para {
+			t.Errorf("Parse(%q) children = %v, want [%s]", src, tags, Para)
+		}
+	}
+}
+
 func TestLeafCountIndent(t *testing.T) {
 	for _, tc := range []struct {
 		line string
