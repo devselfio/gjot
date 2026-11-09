@@ -51,9 +51,12 @@ func TestParseAttrs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := parseAttrsFromStr(tt.src)
+			got, end, ok := parseInlineAttrs(tt.src, 0)
 			if ok != tt.ok {
 				t.Fatalf("ok = %v, want %v", ok, tt.ok)
+			}
+			if ok && end != len(tt.src) {
+				t.Errorf("end = %d, want %d", end, len(tt.src))
 			}
 			if ok && !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %+v, want %+v", got, tt.want)
@@ -72,15 +75,6 @@ func TestParseInlineAttrsEnd(t *testing.T) {
 	}
 	if _, _, ok := parseInlineAttrs("x{.c y", 1); ok {
 		t.Error("unterminated attributes parsed as ok")
-	}
-}
-
-func TestTryParseBlockAttr(t *testing.T) {
-	if _, ok := tryParseBlockAttr("  {#id}  "); !ok {
-		t.Error("surrounding whitespace rejected")
-	}
-	if _, ok := tryParseBlockAttr("{#id} tail"); ok {
-		t.Error("trailing text accepted")
 	}
 }
 
@@ -107,8 +101,8 @@ func TestBlockAttrsMerge(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, _ := parseAttrsFromStr(tt.first)
-			b, _ := parseAttrsFromStr(tt.second)
+			a := wholeAttrs(t, tt.first)
+			b := wholeAttrs(t, tt.second)
 			if got := a.merge(b); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %+v, want %+v", got, tt.want)
 			}
@@ -121,9 +115,42 @@ func TestBlockAttrsMerge(t *testing.T) {
 // `#` writes none (L9844).
 func TestBlockAttrsWritesID(t *testing.T) {
 	for src, want := range map[string]bool{`{#x}`: true, `{id=""}`: true, `{#}`: false, `{.c}`: false} {
-		ba, _ := parseAttrsFromStr(src)
+		ba := wholeAttrs(t, src)
 		if got := ba.writesID(); got != want {
 			t.Errorf("%s: writesID = %v, want %v", src, got, want)
 		}
+	}
+}
+
+// wholeAttrs parses src, which must be one whole attribute set, as
+// parseInlineAttrs reads it.
+func wholeAttrs(t *testing.T, src string) blockAttrs {
+	t.Helper()
+	ba, end, ok := parseInlineAttrs(src, 0)
+	if !ok || end != len(src) {
+		t.Fatalf("%s: ok=%v end=%d, want true %d", src, ok, end, len(src))
+	}
+	return ba
+}
+
+// A block attribute line may have whitespace around the set, but text after
+// it makes the line a paragraph's, where the set is an inline attribute with
+// nothing to attach to. These are the rules the deleted TestTryParseBlockAttr
+// pinned, here through Parse.
+func TestBlockAttrLineThroughParse(t *testing.T) {
+	tests := []struct{ name, input, want string }{
+		{"surrounding whitespace allowed", "  {#id}  \npara\n", "<p id=\"id\">para</p>\n"},
+		{"trailing text is not a block attribute", "{#id} tail\n", "<p> tail</p>\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(tt.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("input %q: got %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

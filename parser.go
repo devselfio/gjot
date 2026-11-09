@@ -214,7 +214,6 @@ const (
 )
 
 // listData is what a list's items share and parse.js's tightness state.
-// Filled in by slice 3.
 type listData struct {
 	style      listKind
 	bullet     byte
@@ -226,8 +225,8 @@ type listData struct {
 	tight      bool
 }
 
-// containerData has the fields of every kind; the container's kind says
-// which apply (farraway/gridapp#12, Decision 3).
+// containerData has the fields of every container kind in one struct rather
+// than a type per kind; the container's kind says which apply.
 type containerData struct {
 	// heading
 	level int

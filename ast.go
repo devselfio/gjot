@@ -81,7 +81,7 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 	// Attributes print as the corpus's converter orders them: id, class, then
 	// the rest in source order. The written id wins over a generated one, an
 	// empty `id=""` included (zjot ast.zig).
-	attrs := n.renderedAttrs()
+	attrs := n.Attrs
 	if id, written := n.writtenID(); written || n.ID != "" {
 		if !written {
 			id = n.ID
