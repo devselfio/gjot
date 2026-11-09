@@ -142,21 +142,15 @@ func (d *djotWriter) block(n *Node) []string {
 		if marker == "" {
 			marker = "-"
 		}
-		for i, item := range n.Children {
-			if i > 0 && !n.Tight {
-				lines = append(lines, "")
+		return append(lines, d.listItems(n, func(_ int, item *Node) (string, string) {
+			switch {
+			case item.Tag != TaskListItem:
+				return marker, "  "
+			case item.Checked != nil && *item.Checked:
+				return marker + " [x]", "  "
 			}
-			first := marker + " "
-			if item.Tag == TaskListItem {
-				if item.Checked != nil && *item.Checked {
-					first += "[x] "
-				} else {
-					first += "[ ] "
-				}
-			}
-			lines = append(lines, d.item(item.Children, first, "  ")...)
-		}
-		return lines
+			return marker + " [ ]", "  "
+		})...)
 	case DefinitionList:
 		for i, item := range n.Children {
 			if i > 0 {
@@ -188,13 +182,41 @@ func (d *djotWriter) block(n *Node) []string {
 	return lines
 }
 
-// writeItem renders a list item's blocks under its marker.
-func (d *djotWriter) item(blocks []*Node, first, rest string) []string {
+// listItems renders a list's items, each under the marker and at the
+// continuation indent markerOf gives it, with a blank line between items
+// when the list is loose. A loose list of one item with at most one block
+// has no gap to show it: the source had a block the AST does not hold (a
+// reference definition) after a blank line in the item, so the item ends
+// with `{}` after a blank line, which reads back as nothing and keeps the
+// list loose.
+func (d *djotWriter) listItems(n *Node, markerOf func(i int, item *Node) (marker, indent string)) []string {
+	var lines []string
+	for i, item := range n.Children {
+		if i > 0 && !n.Tight {
+			lines = append(lines, "")
+		}
+		marker, indent := markerOf(i, item)
+		lines = append(lines, d.item(item.Children, marker, indent)...)
+		if !n.Tight && len(n.Children) == 1 && len(item.Children) <= 1 {
+			lines = append(lines, "", indent+"{}")
+		}
+	}
+	return lines
+}
+
+// item renders a list item's blocks under its marker, the first block on
+// the marker's line and the rest indented by rest. A thematic break goes
+// under a bare marker instead: the marker and `* * *` on one line read as a
+// thematic break.
+func (d *djotWriter) item(blocks []*Node, marker, rest string) []string {
 	inner := d.blocks(blocks)
 	if len(inner) == 0 {
-		return []string{first}
+		return []string{marker}
 	}
-	return indented(inner, first, rest, "")
+	if blocks[0].Tag == ThematicBreak {
+		return append([]string{marker}, indented(inner, rest, rest, "")...)
+	}
+	return indented(inner, marker+" ", rest, "")
 }
 
 // fenceLength is one more than the longest run of char opening a line, and
@@ -218,18 +240,13 @@ func (d *djotWriter) orderedList(n *Node) []string {
 		style, delim = styleDecimal, delimPeriod
 	}
 	start := orderedStart(n)
-	var lines []string
-	for i, item := range n.Children {
-		if i > 0 && !n.Tight {
-			lines = append(lines, "")
-		}
+	return d.listItems(n, func(i int, _ *Node) (string, string) {
 		marker := orderedMarker(start+i, style, delim)
 		if marker == "" {
 			marker = orderedMarker(start, style, delim)
 		}
-		lines = append(lines, d.item(item.Children, marker+" ", strings.Repeat(" ", len(marker)+1))...)
-	}
-	return lines
+		return marker, strings.Repeat(" ", len(marker)+1)
+	})
 }
 
 // orderedMarker is the marker for item number num in a list of the given

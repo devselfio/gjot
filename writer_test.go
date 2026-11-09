@@ -409,3 +409,34 @@ func TestWriterAttributeOrderAndEmptyID(t *testing.T) {
 		}
 	}
 }
+
+// A thematic break opening an item goes under a bare marker, since the
+// marker and `* * *` on one line read as a thematic break (grid.test L232,
+// L244); a loose list of one item, which only an AST-invisible block after a
+// blank line can have made loose (a reference definition in the source),
+// ends its item with `{}` after a blank line so it reads back loose
+// (grid.test L1463, zjot.test L1705).
+func TestWriterItemThematicBreakAndLooseSingleItem(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"thematic-break-item", "-\n  ***\n", "-\n  * * *\n"},
+		{"thematic-break-ordered-item", "1.\n   ***\n", "1.\n   * * *\n"},
+		{"thematic-break-task-item", "- [x]\n  ***\n", "- [x]\n  * * *\n"},
+		{"thematic-break-second-block", "- a\n\n  ***\n", "- a\n\n  * * *\n"},
+		{"loose-item-with-its-definition", "- [t][r]\n\n  [r]: /u\n", "- [t][r]\n\n  {}\n\n[r]: /u\n"},
+		{"loose-item-with-unused-definition", "- a\n\n  [r]: /u\nlazy\n", "- a\n\n  {}\n\nlazy\n"},
+		{"loose-empty-item", "-\n\n  [r]: /u\n", "-\n\n  {}\n"},
+		{"loose-nested-item", "- - a\n\n    [r]: /u\n", "- - a\n\n    {}\n"},
+		{"loose-two-items-unchanged", "- a\n\n- b\n", "- a\n\n- b\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			djot, _ := roundTrip(t, c.src)
+			if djot != c.want {
+				t.Errorf("written\n%s\nwant\n%s", djot, c.want)
+			}
+			want := string(ASTText(Parse([]byte(c.src))))
+			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+		})
+	}
+}
