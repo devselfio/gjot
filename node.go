@@ -11,29 +11,28 @@ type Tag string
 
 // Block tags.
 const (
-	Para                Tag = "para"
-	Heading             Tag = "heading"
-	Section             Tag = "section"
-	ThematicBreak       Tag = "thematic_break"
-	CodeBlock           Tag = "code_block"
-	BlockQuote          Tag = "block_quote"
-	Div                 Tag = "div"
-	BulletList          Tag = "bullet_list"
-	OrderedList         Tag = "ordered_list"
-	TaskList            Tag = "task_list"
-	DefinitionList      Tag = "definition_list"
-	ListItem            Tag = "list_item"
-	TaskListItem        Tag = "task_list_item"
-	DefinitionListItem  Tag = "definition_list_item"
-	Term                Tag = "term"
-	Definition          Tag = "definition"
-	Table               Tag = "table"
-	Caption             Tag = "caption"
-	Row                 Tag = "row"
-	Cell                Tag = "cell"
-	RawBlock            Tag = "raw_block"
-	Footnote            Tag = "footnote"
-	ReferenceDefinition Tag = "reference_definition"
+	Para               Tag = "para"
+	Heading            Tag = "heading"
+	Section            Tag = "section"
+	ThematicBreak      Tag = "thematic_break"
+	CodeBlock          Tag = "code_block"
+	BlockQuote         Tag = "block_quote"
+	Div                Tag = "div"
+	BulletList         Tag = "bullet_list"
+	OrderedList        Tag = "ordered_list"
+	TaskList           Tag = "task_list"
+	DefinitionList     Tag = "definition_list"
+	ListItem           Tag = "list_item"
+	TaskListItem       Tag = "task_list_item"
+	DefinitionListItem Tag = "definition_list_item"
+	Term               Tag = "term"
+	Definition         Tag = "definition"
+	Table              Tag = "table"
+	Caption            Tag = "caption"
+	Row                Tag = "row"
+	Cell               Tag = "cell"
+	RawBlock           Tag = "raw_block"
+	Footnote           Tag = "footnote"
 )
 
 // Inline tags.
@@ -62,11 +61,6 @@ const (
 	Email             Tag = "email"
 	FootnoteReference Tag = "footnote_reference"
 	Symb              Tag = "symb"
-	Escape            Tag = "escape"
-	LeftSingleQuote   Tag = "left_single_quote"
-	RightSingleQuote  Tag = "right_single_quote"
-	LeftDoubleQuote   Tag = "left_double_quote"
-	RightDoubleQuote  Tag = "right_double_quote"
 	Ellipsis          Tag = "ellipsis"
 	EmDash            Tag = "em_dash"
 	EnDash            Tag = "en_dash"
@@ -119,16 +113,13 @@ type Range struct {
 // footnote reference's HTML writes its fnrefN only and drops a written id
 // (zjot.test difference 3). A footnote reference's Text is its label, as is
 // a Footnote's (a definition, standing after the document's blocks); the HTML
-// renderer numbers them. Parse never
-// sets Classes; renderers read it as the class list of a node built without
-// a "class" entry.
+// renderer numbers them.
 type Node struct {
 	Tag         Tag       `json:"tag"`
 	Children    []*Node   `json:"children,omitempty"`
 	Text        string    `json:"text,omitempty"`
 	Level       int       `json:"level,omitempty"`
 	ID          string    `json:"id,omitempty"`
-	Classes     string    `json:"classes,omitempty"`
 	Lang        string    `json:"lang,omitempty"`
 	Destination *string   `json:"destination,omitempty"`
 	Reference   string    `json:"reference,omitempty"`
@@ -160,15 +151,6 @@ type Node struct {
 // parsed from; end == 0 means the node has none.
 type srcSpan struct{ start, end int }
 
-// renderedAttrs is the attribute list renderers read: Attrs, with Classes
-// as its "class" entry when Attrs has none.
-func (n *Node) renderedAttrs() []Attr {
-	if n.Classes == "" || hasKey(n.Attrs, "class") {
-		return n.Attrs
-	}
-	return append(append([]Attr{}, n.Attrs...), Attr{"class", n.Classes})
-}
-
 // writtenID is the id written on the node and whether one was, an empty
 // `id=""` included.
 func (n *Node) writtenID() (string, bool) {
@@ -182,7 +164,7 @@ func (n *Node) writtenID() (string, bool) {
 
 // classList is the classes the node renders with.
 func (n *Node) classList() []string {
-	return strings.Fields(valueOf(n.renderedAttrs(), "class"))
+	return strings.Fields(valueOf(n.Attrs, "class"))
 }
 
 // HasClass reports whether class is among the node's rendered classes.

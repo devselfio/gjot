@@ -367,7 +367,7 @@ func (r *renderer) render(n *Node) {
 			r.footnoteLabels = append(r.footnoteLabels, n.Text)
 		}
 		r.footnoteDefs[n.Text] = n
-	case Str, Escape:
+	case Str:
 		r.esc(n.Text)
 	case SoftBreak:
 		r.w("\n")
@@ -420,7 +420,7 @@ func (r *renderer) render(n *Node) {
 		// written twice (zjot.test difference 3).
 		num := strconv.Itoa(r.footnoteNumber(n.Text))
 		r.w("<a id=\"fnref" + num + "\" href=\"#fn" + num + "\" role=\"doc-noteref\"")
-		for _, a := range n.renderedAttrs() {
+		for _, a := range n.Attrs {
 			if a.Key != "id" {
 				r.attr(a.Key, a.Value)
 			}
@@ -478,14 +478,6 @@ func (r *renderer) render(n *Node) {
 		r.w("\u2019")
 	case NonBreakingSpace:
 		r.w("&nbsp;")
-	case LeftSingleQuote:
-		r.w("\u2018")
-	case RightSingleQuote:
-		r.w("\u2019")
-	case LeftDoubleQuote:
-		r.w("\u201c")
-	case RightDoubleQuote:
-		r.w("\u201d")
 	case Ellipsis:
 		r.w("\u2026")
 	case EmDash:
@@ -568,7 +560,7 @@ func (r *renderer) classed(intrinsic string, n *Node) {
 }
 
 func (r *renderer) filteredAttrs(n *Node, skipClass bool) {
-	attrs := n.renderedAttrs()
+	attrs := n.Attrs
 	if n.ID != "" && !hasKey(attrs, "id") {
 		r.attr("id", n.ID)
 	}
