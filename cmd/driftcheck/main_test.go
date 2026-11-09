@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -141,6 +142,39 @@ func snapshot(t *testing.T, dir string) map[string]string {
 	return m
 }
 
+// workflowTargets returns the make targets that the workflow's one-line
+// "run: make <target>" steps name, in file order. A plain regexp, since
+// gjot has no YAML dependency; a commented-out line does not match.
+func workflowTargets(t *testing.T, path string) []string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*run:\s*make\s+([A-Za-z_-]+)\s*$`)
+	var targets []string
+	for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+		targets = append(targets, m[1])
+	}
+	return targets
+}
+
+// makefileTargets returns the targets the Makefile defines: each line
+// matching ^[a-zA-Z_-]+:, the rule "make help" already relies on.
+func makefileTargets(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`(?m)^([a-zA-Z_-]+):`)
+	defined := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+		defined[m[1]] = true
+	}
+	return defined
+}
+
 func TestParseOriginRealFile(t *testing.T) {
 	b, err := os.ReadFile("../../testdata/spec/ORIGIN.md")
 	if err != nil {
@@ -152,6 +186,37 @@ func TestParseOriginRealFile(t *testing.T) {
 	}
 	if o.Repository != "https://github.com/quiteclose/zjot" || o.Ref != "v2.0.0" {
 		t.Fatalf("got %+v", o)
+	}
+}
+
+// TestWorkflowRunsDriftcheck checks the CI workflow against the Makefile:
+// every make target a step runs must exist, and the drift check, once the
+// maintainer adds it (swarm-gridapp#6), must come after the spec pass
+// count. Until the step is there, the test skips.
+func TestWorkflowRunsDriftcheck(t *testing.T) {
+	targets := workflowTargets(t, "../../.github/workflows/ci.yml")
+	defined := makefileTargets(t, "../../Makefile")
+	for _, tg := range targets {
+		if !defined[tg] {
+			t.Errorf("ci.yml runs make %s, which Makefile does not define", tg)
+		}
+	}
+	count, index := map[string]int{}, map[string]int{}
+	for i, tg := range targets {
+		count[tg]++
+		index[tg] = i + 1
+	}
+	if count["spec-count"] != 1 {
+		t.Fatalf("ci.yml runs make spec-count %d times, want exactly 1", count["spec-count"])
+	}
+	if count["spec-drift"] > 1 {
+		t.Fatalf("ci.yml runs make spec-drift %d times, want at most 1", count["spec-drift"])
+	}
+	if count["spec-drift"] == 0 {
+		t.Skip("ci.yml has no `run: make spec-drift` step; the maintainer commits it (swarm-gridapp#6); slice 2 turns this skip into a failure")
+	}
+	if index["spec-drift"] < index["spec-count"] {
+		t.Fatalf("ci.yml runs make spec-drift at step %d, before make spec-count at step %d", index["spec-drift"], index["spec-count"])
 	}
 }
 
