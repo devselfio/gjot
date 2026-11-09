@@ -56,6 +56,10 @@ func TestWriterInlineEdges(t *testing.T) {
 		"{+ins+}{-del-}{=mark=} and \\{+ no\n",
 		"`` `x` `` and ` `` ` and $`a`b$ and $$`m`\n",
 		"[a](b\\)c) and [x][] and [y][z] and ![i](j){.k}\n",
+		// A destination's bytes the forward pass would consume or close on.
+		"[a](b`)`) and [c](<http://x)>) and [d](e\\[f\\]g) and ![h](i\\(j) and [k](l\\{m)\n",
+		// Text a bare "]" leaves standing, and a destination's inner link.
+		"[a][b [c] d] and [e](f [g](h) i) and [j]{k and [l](m](n)\n",
 		"<http://a\"b> and <x@y> and <mailto:x@y>\n",
 		"a... and ...b and \\.\\.\\. and {1--}\n",
 		"{#id} at beginning\n\nAfter {#id} space\n{.class}\n",

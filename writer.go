@@ -637,7 +637,7 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		case n.Reference != "" && w.d.defineRef(normalizeLabel(n.Reference), *n.Destination):
 			w.write("[" + n.Reference + "]")
 		default:
-			w.write("(" + strings.ReplaceAll(*n.Destination, "\\", "\\\\") + ")")
+			w.write("(" + destination(*n.Destination) + ")")
 		}
 		w.attrs(n)
 	case Span:
@@ -717,6 +717,23 @@ func (w *inlineWriter) bracketed(children []*Node) {
 	inner.nodes(children)
 	w.apostrophe = w.apostrophe || inner.apostrophe
 	w.write(inner.b.String())
+}
+
+// destination escapes the bytes of a link's destination that the parser
+// would read as markup before its ")": the escape itself, a paren (an
+// unpaired ")" closes the link), a bracket (a nested link or span, or a
+// moved destination), an autolink's "<", a verbatim's backtick and an
+// attribute's brace, each of which could take the ")" with it. processUrl
+// drops the escapes when the destination is read back.
+func destination(url string) string {
+	var b strings.Builder
+	for i := 0; i < len(url); i++ {
+		if strings.IndexByte("\\()[]<`{", url[i]) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(url[i])
+	}
+	return b.String()
 }
 
 // ticks wraps text in a backtick run longer than any run inside it.
@@ -1076,26 +1093,36 @@ func (w *inlineWriter) attrsCouldClose(tail string, next *Node) bool {
 }
 
 // bracketCloses reports whether a raw "]" followed by tail would close an
-// open bracket into a link, image or span: a destination, a label or an
-// attribute follows and closes within the run, whose remaining length is
-// run; one that would run into the next node is taken to close.
+// open bracket into a link, image or span: a "{" follows (a span, whether
+// or not the attributes parse), or a destination or label follows and
+// closes within the run, whose remaining length is run; one that would run
+// into the next node is taken to close.
 func bracketCloses(tail string, run int) bool {
 	if tail == "" || strings.IndexByte("([{", tail[0]) < 0 {
 		return false
 	}
-	if run == 0 {
+	if run == 0 || tail[0] == '{' {
 		return true
 	}
-	switch tail[0] {
-	case '(':
-		_, ok := findMatchingParen(tail, 0)
-		return ok
-	case '[':
-		_, ok := findMatchingBracket(tail, 0)
-		return ok
+	return closesWithin(tail, tail[0], map[byte]byte{'(': ')', '[': ']'}[tail[0]])
+}
+
+// closesWithin reports whether the open bracket at tail's start is paired
+// by a close before tail ends, counting the pairs between.
+func closesWithin(tail string, open, close byte) bool {
+	depth := 0
+	for i := 0; i < len(tail); i++ {
+		switch tail[i] {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return true
+			}
+		}
 	}
-	_, _, ok := parseInlineAttrs(tail, 0)
-	return ok
+	return false
 }
 
 // apostrophe is the glyph an apostrophe renders as.

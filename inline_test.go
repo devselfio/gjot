@@ -274,3 +274,53 @@ func TestAutolinkAt(t *testing.T) {
 		}
 	}
 }
+
+// Brackets close forward, as djot.js: a bare "]" is text and leaves the
+// openers inside its pair standing; "]{" is a span whether or not the
+// attributes parse; "][" and "](" mark the bracket, whose label or
+// destination is then read as text until the next "]" or the ")" with no
+// "(" of its own to pair, so brackets, verbatim, autolinks and parens inside
+// it do not end it; a second "](" moves the destination; a footnote label
+// ends at the first "]" and stays on one line (zjot.test L8976-L9177,
+// L10493-L10603, L10845).
+func TestInlineBracketsCloseForward(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{"q[a]b](u)\n", "<p>q<a href=\"u\">a]b</a></p>\n"},
+		{"q[[a]b](u)\n", "<p>q[<a href=\"u\">a]b</a></p>\n"},
+		{"![a]b](u)\n", "<p><img alt=\"a]b\" src=\"u\"></p>\n"},
+		{"[_a]_\n", "<p>[<em>a]</em></p>\n"},
+		{"['a]'\n", "<p>[‘a]’</p>\n"},
+		{"[a _b] c_ d](u)\n", "<p><a href=\"u\">a <em>b] c</em> d</a></p>\n"},
+		{"[a]{x\n", "<p><span>a</span>{x</p>\n"},
+		{"![a]{.c}\n", "<p>!<span class=\"c\">a</span></p>\n"},
+		{"[a]{.c b](u)\n", "<p><span>a</span>{.c b](u)</p>\n"},
+		{"[a](u\\)b)\n", "<p><a href=\"u)b\">a</a></p>\n"},
+		{"[a][b [c] d]\n", "<p>[a][b [c] d]</p>\n"},
+		{"[a](u [b] c)\n", "<p>[a](u [b] c)</p>\n"},
+		{"[a](u [b](v) c)\n", "<p>[a](u <a href=\"v\">b</a> c)</p>\n"},
+		{"[a](b`)`)\n", "<p><a href=\"b`)`\">a</a></p>\n"},
+		{"[a](<http://x)>)\n", "<p><a href=\"&lt;http://x)&gt;\">a</a></p>\n"},
+		{"[a](b(c)d) [a](b _(c_ d) e)\n", "<p><a href=\"b(c)d\">a</a> <a href=\"b _(c_ d\">a</a> e)</p>\n"},
+		{"[a](b](c)\n", "<p><a href=\"c\">a](b</a></p>\n"},
+		{"[a](b [c](d) e\n", "<p>[a](b <a href=\"d\">c</a> e</p>\n"},
+		{"[a](b [c][d] e)\n", "<p><a href=\"b [c][d] e\">a</a></p>\n"},
+		{"[a](b]{.c} d)\n", "<p><span class=\"c\">a](b</span> d)</p>\n"},
+		{"*[a](b*)\n", "<p>*<a href=\"b*\">a</a></p>\n"},
+		{"[x](a ([y (][c) d] e)\n", "<p><a href=\"a ([y (][c) d] e\">x</a></p>\n"},
+		{"q[^a\nb]\n", "<p>q[^a\nb]</p>\n"},
+		{"q[^a[b]c]\n", "<p>q<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a>c]</p>\n"},
+		{"q![^a](u)\n", "<p>q!<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a>(u)</p>\n"},
+	} {
+		out, err := HTML(Parse([]byte(tt.src)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(out)
+		if i := strings.Index(got, "<section role"); i >= 0 {
+			got = got[:i]
+		}
+		if got != tt.want {
+			t.Errorf("%q\n got %q\nwant %q", tt.src, got, tt.want)
+		}
+	}
+}

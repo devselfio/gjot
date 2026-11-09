@@ -25,6 +25,25 @@ type openerInfo struct {
 	// a braced opener, else the delimiter itself.
 	srcPos int
 	marked bool
+	// link is set on a bracket whose "](" or "][" has come: djot.js's
+	// explicit_link or reference_link, closed by the ")" or "]" the
+	// forward pass comes to.
+	link *linkOpen
+}
+
+// linkOpen is a bracket's "](" or "][": the link's text is the items before
+// it, and the items from it on are the destination or label, which is read
+// off the source instead.
+type linkOpen struct {
+	reference bool
+	// itemIdx is the item of the "](" or "][".
+	itemIdx int
+	// srcPos is where its "]" is in the source.
+	srcPos int
+	// droppedLen is len(p.dropped) as it was then: an id read in the
+	// destination or label is text once the link closes, which djot.js
+	// does not register.
+	droppedLen int
 }
 
 // touches reports whether a closer at pos would make an empty pair: the
@@ -59,6 +78,19 @@ type inlineParser struct {
 	openers   []openerInfo
 	pos       int
 	textStart int
+	// destination is set at a "](" and cleared when a link closes on its
+	// ")", as djot.js's, which a destination never closed leaves set:
+	// while set, "(" and ")" pair up, and a ")" with no "(" to pair
+	// closes the nearest bracket's link when that bracket is an explicit
+	// link.
+	destination bool
+	// parens is where each "(" read in the destination stands, unpaired
+	// so far: djot.js's "(" openers, which a match over them clears as
+	// it clears every opener inside it.
+	parens []int
+	// noFootnoteBefore: no footnote reference opens before here
+	// (footnoteRefEnd).
+	noFootnoteBefore int
 }
 
 func parseInlines(lines []string) []*Node {
@@ -176,7 +208,23 @@ func (p *inlineParser) closeAt(i int, tag Tag, end int) {
 	op := p.openers[i]
 	children := p.collectChildren(op.itemIdx)
 	p.pushNode(at(&Node{Tag: tag, Children: children}, op.srcPos, end))
-	p.openers = p.openers[:i]
+	p.truncateOpeners(i)
+}
+
+// truncateOpeners drops the openers from n up, and the parens from where
+// the lowest of them starts.
+func (p *inlineParser) truncateOpeners(n int) {
+	if n < len(p.openers) {
+		p.dropParens(p.openers[n].srcPos)
+	}
+	p.openers = p.openers[:n]
+}
+
+// dropParens drops the parens read at or after from.
+func (p *inlineParser) dropParens(from int) {
+	for len(p.parens) > 0 && p.parens[len(p.parens)-1] >= from {
+		p.parens = p.parens[:len(p.parens)-1]
+	}
 }
 
 func (p *inlineParser) parse() []*Node {
@@ -238,13 +286,11 @@ func (p *inlineParser) parse() []*Node {
 			p.textStart = p.pos
 		case '[':
 			p.flushText()
-			if p.pos+1 < len(src) && src[p.pos+1] == '^' {
-				if close, ok := findMatchingBracket(src, p.pos); ok {
-					p.pushNode(at(&Node{Tag: FootnoteReference, Text: src[p.pos+2 : close]}, p.pos, close+1))
-					p.pos = close + 1
-					p.textStart = p.pos
-					continue
-				}
+			if close := p.footnoteRefEnd(p.pos); close >= 0 {
+				p.pushNode(at(&Node{Tag: FootnoteReference, Text: src[p.pos+2 : close]}, p.pos, close+1))
+				p.pos = close + 1
+				p.textStart = p.pos
+				continue
 			}
 			// The bracket is an item of its own: the opener's index points at it.
 			p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
@@ -252,7 +298,10 @@ func (p *inlineParser) parse() []*Node {
 			p.pos++
 			p.textStart = p.pos
 		case '!':
-			if p.pos+1 < len(src) && src[p.pos+1] == '[' {
+			// ![^a] is "!" and a footnote reference: djot.js decides an
+			// image at the closing bracket, where the reference has
+			// already matched.
+			if p.pos+1 < len(src) && src[p.pos+1] == '[' && p.footnoteRefEnd(p.pos+1) < 0 {
 				p.flushText()
 				p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
 				p.pushNode(strNode(src[p.pos:p.pos+2], p.pos))
@@ -265,6 +314,19 @@ func (p *inlineParser) parse() []*Node {
 			p.flushText()
 			p.handleCloseBracket()
 			p.textStart = p.pos
+		case '(':
+			if p.destination {
+				p.parens = append(p.parens, p.pos)
+			}
+			p.pos++
+		case ')':
+			if p.destination && !p.popParen() {
+				p.flushText()
+				p.handleCloseParen()
+				p.textStart = p.pos
+			} else {
+				p.pos++
+			}
 		case '<':
 			p.flushText()
 			if !p.handleAutolink() {
@@ -501,11 +563,12 @@ func (p *inlineParser) topOpener(char byte, marked bool) int {
 }
 
 // closeMarked closes the marked opener {X with the X} at p.pos as a node of
-// tag spanning both braces; false when no opener is there to close or its
-// pair would be empty.
+// tag spanning both braces; false when no opener is there to close, its
+// pair would be empty, or it stands before the link whose destination is
+// open (outsideLink).
 func (p *inlineParser) closeMarked(char byte, tag Tag) bool {
 	i := p.topOpener(char, true)
-	if i < 0 || p.openers[i].touches(p.pos) {
+	if i < 0 || p.openers[i].touches(p.pos) || p.outsideLink(i) {
 		return false
 	}
 	p.closeAt(i, tag, p.pos+2)
@@ -543,7 +606,11 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 
 	if canCloseDelim(src, pos) && !marked {
 		if i := p.topOpener(char, false); i >= 0 && !p.openers[i].touches(pos) {
-			p.closeAt(i, matchedTag(char), pos+1)
+			if p.outsideLink(i) {
+				p.addText(src[pos:pos+1], pos)
+			} else {
+				p.closeAt(i, matchedTag(char), pos+1)
+			}
 			p.pos = pos + 1
 			return
 		}
@@ -559,69 +626,171 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 	p.pos = pos + 1
 }
 
+// footnoteRefEnd is where a footnote reference opening at pos ("[^") ends:
+// its first "]", with a label of at least one byte on the line between, as
+// djot.js's [^\]]+ over the line; -1 otherwise ("[^]" is text). A scan that
+// meets the line's end or the input's first has shown every "[^" before
+// that point to fail too, which is kept, so a line of them is linear.
+func (p *inlineParser) footnoteRefEnd(pos int) int {
+	src := p.src
+	if pos+1 >= len(src) || src[pos+1] != '^' || pos < p.noFootnoteBefore {
+		return -1
+	}
+	close := pos + 2
+	for close < len(src) && src[close] != ']' && src[close] != '\n' {
+		close++
+	}
+	if close >= len(src) || src[close] == '\n' {
+		p.noFootnoteBefore = close
+		return -1
+	}
+	if close == pos+2 {
+		return -1
+	}
+	return close
+}
+
+// nearestBracket is the index of the nearest bracket opener of either kind,
+// or -1.
+func (p *inlineParser) nearestBracket() int {
+	for i := len(p.openers) - 1; i >= 0; i-- {
+		if c := p.openers[i].char; c == '[' || c == '!' {
+			return i
+		}
+	}
+	return -1
+}
+
+// outsideLink reports whether a closer is kept from the opener at i: inside
+// an open destination, an opener before the link's bracket, which djot.js
+// after 0.3.2 does not match there and its suite expects (*[a](b*) is "*"
+// and a link). The closer is then text, and opens nothing.
+func (p *inlineParser) outsideLink(i int) bool {
+	if !p.destination {
+		return false
+	}
+	b := p.nearestBracket()
+	if b < 0 {
+		return false
+	}
+	open := p.openers[b].link
+	return open != nil && !open.reference && i < b
+}
+
+// popParen pairs a ")" with the last "(" read in the destination; false
+// when none is unpaired.
+func (p *inlineParser) popParen() bool {
+	if len(p.parens) == 0 {
+		return false
+	}
+	p.parens = p.parens[:len(p.parens)-1]
+	return true
+}
+
+// closeLink closes the link or image the bracket opener i began, on the ")"
+// or "]" ending at end: its text is the items before its "](" or "][", and
+// those from it on go.
+func (p *inlineParser) closeLink(i int, link *Node, end int) {
+	op := p.openers[i]
+	open := op.link
+	p.items = p.items[:open.itemIdx]
+	p.dropped = p.dropped[:open.droppedLen]
+	link.Children = p.collectChildren(op.itemIdx)
+	link.Tag = Link
+	start := op.srcPos
+	if op.char == '!' {
+		// djot.js starts an image on its bracket, not its "!".
+		link.Tag, start = Image, op.srcPos+1
+	}
+	p.pushNode(at(link, start, end))
+	p.truncateOpeners(i)
+}
+
 func (p *inlineParser) handleCloseBracket() {
 	src, pos := p.src, p.pos
-	for i := len(p.openers) - 1; i >= 0; i-- {
-		op := p.openers[i]
-		if op.char != '[' && op.char != '!' {
-			continue
-		}
-		children := p.collectChildren(op.itemIdx)
-		tag, bracket, start := Link, "[", op.srcPos
-		if op.char == '!' {
-			// zjot starts an image at its "[", not the "!".
-			tag, bracket, start = Image, "![", op.srcPos+1
-		}
+	i := p.nearestBracket()
+	if i < 0 {
+		p.addText(src[pos:pos+1], pos)
 		p.pos = pos + 1
-
-		if p.pos < len(src) {
-			switch src[p.pos] {
-			case '(':
-				if cp, ok := findMatchingParen(src, p.pos); ok {
-					dest := processUrl(src[p.pos+1 : cp])
-					p.pos = cp + 1
-					p.pushNode(at(&Node{Tag: tag, Children: children, Destination: &dest}, start, p.pos))
-					p.openers = p.openers[:i]
-					return
-				}
-			case '[':
-				if cr, ok := findMatchingBracket(src, p.pos); ok {
-					// The label is stored normalized, as djot.js's AST
-					// prints it; a label of blanks only keeps its blanks,
-					// since "" would read as the text-as-label form [a][]
-					// (zjot.test L9266: [a][ ] resolves nothing).
-					ref := src[p.pos+1 : cr]
-					if norm := normalizeLabel(ref); norm != "" {
-						ref = norm
-					}
-					p.pushNode(at(&Node{Tag: tag, Children: children, Reference: ref}, start, cr+1))
-					p.pos = cr + 1
-					p.openers = p.openers[:i]
-					return
-				}
-			case '{':
-				if ba, end, ok := p.inlineAttrs(p.pos); ok {
-					// The span ends at its "]"; the attributes are not part of it.
-					span := at(&Node{Tag: Span, Children: children}, op.srcPos, pos+1)
-					applyBlockAttrs(span, ba)
-					p.pushNode(span)
-					p.pos = end
-					p.openers = p.openers[:i]
-					return
-				}
-			}
-		}
-
-		// Not a link after all: put the bracketed text back as text.
-		p.pushNode(strNode(bracket, op.srcPos))
-		for _, c := range children {
-			p.pushNode(c)
-		}
-		p.pushNode(strNode(src[pos:pos+1], pos))
-		p.openers = p.openers[:i]
 		return
 	}
+	op := p.openers[i]
+	next := pos + 1
+
+	if open := op.link; open != nil && open.reference {
+		// The label is stored normalized, as djot.js's AST prints it; a
+		// label of blanks only keeps its blanks, since "" would read as
+		// the text-as-label form [a][] (zjot.test L9266: [a][ ] resolves
+		// nothing).
+		ref := src[open.srcPos+2 : pos]
+		if norm := normalizeLabel(ref); norm != "" {
+			ref = norm
+		}
+		p.closeLink(i, &Node{Reference: ref}, pos+1)
+		p.pos = pos + 1
+		return
+	}
+
+	if next < len(src) && (src[next] == '(' || src[next] == '[') {
+		// The link closes where the destination or label does, as the
+		// pass comes to it; what follows until then is read as any text.
+		// The openers inside the link's text are done with ([x_y](x_ has
+		// no emphasis), parens among them.
+		p.truncateOpeners(i + 1)
+		p.dropParens(op.srcPos)
+		p.openers[i].link = &linkOpen{reference: src[next] == '[', itemIdx: len(p.items), srcPos: pos, droppedLen: len(p.dropped)}
+		p.pushNode(strNode(src[pos:pos+2], pos))
+		if src[next] == '(' {
+			p.destination = true
+			p.parens = p.parens[:0]
+		}
+		p.pos = pos + 2
+		return
+	}
+
+	if next < len(src) && src[next] == '{' {
+		// A span, with the attributes when they parse; else the brace is
+		// text (djot.js). An image's "!" is text before it.
+		children := p.collectChildren(op.itemIdx)
+		start := op.srcPos
+		if op.char == '!' {
+			p.pushNode(strNode(src[op.srcPos:op.srcPos+1], op.srcPos))
+			start++
+		}
+		// The span ends at its "]"; the attributes are not part of it.
+		span := at(&Node{Tag: Span, Children: children}, start, pos+1)
+		if ba, end, ok := p.inlineAttrs(next); ok {
+			applyBlockAttrs(span, ba)
+			p.pos = end
+		} else {
+			p.pos = next
+		}
+		p.pushNode(span)
+		p.truncateOpeners(i)
+		return
+	}
+
+	// A bare "]" is text, and the openers inside stay ([_a]_ has
+	// emphasis), as djot.js.
 	p.addText(src[pos:pos+1], pos)
+	p.pos = pos + 1
+}
+
+// handleCloseParen handles a ")" in a destination with no "(" of its own to
+// pair: it closes the link of the nearest bracket when that bracket is an
+// explicit link, as djot.js, and is text otherwise.
+func (p *inlineParser) handleCloseParen() {
+	pos := p.pos
+	if i := p.nearestBracket(); i >= 0 {
+		if open := p.openers[i].link; open != nil && !open.reference {
+			dest := processUrl(p.src[open.srcPos+2 : pos])
+			p.closeLink(i, &Node{Destination: &dest}, pos+1)
+			p.destination = false
+			p.pos = pos + 1
+			return
+		}
+	}
+	p.addText(p.src[pos:pos+1], pos)
 	p.pos = pos + 1
 }
 
@@ -774,7 +943,13 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 
 	if canClose {
 		if i := p.topOpener(char, false); i >= 0 && !p.openers[i].touches(pos) {
-			p.closeAt(i, quoteTag(char), pos+1)
+			if !p.outsideLink(i) {
+				p.closeAt(i, quoteTag(char), pos+1)
+			} else if char == '\'' {
+				p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+1))
+			} else {
+				p.pushNode(at(quoteLit("\u201c", "\""), pos, pos+1))
+			}
 			p.pos = pos + 1
 			return
 		}
@@ -1014,28 +1189,6 @@ func trimVerbatimContent(raw string) string {
 	}
 	return raw[start:end]
 }
-
-func findMatching(src string, pos int, open, close byte) (int, bool) {
-	if pos >= len(src) || src[pos] != open {
-		return 0, false
-	}
-	depth := 1
-	for i := pos + 1; i < len(src); i++ {
-		switch src[i] {
-		case open:
-			depth++
-		case close:
-			depth--
-			if depth == 0 {
-				return i, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func findMatchingParen(src string, pos int) (int, bool)   { return findMatching(src, pos, '(', ')') }
-func findMatchingBracket(src string, pos int) (int, bool) { return findMatching(src, pos, '[', ']') }
 
 // processUrl joins a destination split over lines and resolves escapes.
 func processUrl(raw string) string {
