@@ -132,3 +132,25 @@ func wholeAttrs(t *testing.T, src string) blockAttrs {
 	}
 	return ba
 }
+
+// A block attribute line may have whitespace around the set, but text after
+// it makes the line a paragraph's, where the set is an inline attribute with
+// nothing to attach to. These are the rules the deleted TestTryParseBlockAttr
+// pinned, here through Parse.
+func TestBlockAttrLineThroughParse(t *testing.T) {
+	tests := []struct{ name, input, want string }{
+		{"surrounding whitespace allowed", "  {#id}  \npara\n", "<p id=\"id\">para</p>\n"},
+		{"trailing text is not a block attribute", "{#id} tail\n", "<p> tail</p>\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(tt.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("input %q: got %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

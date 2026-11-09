@@ -168,4 +168,5 @@ cmd/driftcheck   Corpus drift check against zjot
   `LeftDoubleQuote` and `RightDoubleQuote`, which `Parse` never produced and no
   renderer needed; and the `Node.Classes` field (JSON `classes`), which `Parse`
   never set. A node's classes are its `class` entry in `Attrs`, read by
-  `HasClass`.
+  `HasClass`. `json.Unmarshal` now ignores a `classes` key in a `Node`
+  document; gjot never wrote one.
