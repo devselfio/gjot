@@ -8,9 +8,11 @@ import (
 // leaf.go is what one line says, in the shape of zjot v2.0.0's leaf.zig:
 // pure functions over a single line, used by the container stack. A tab is
 // one column, as in djot.js.
+// A bare carriage return is blank only to isBlank; after a marker it is an
+// ordinary byte (spaceOrEnd).
 
 // isBlank reports whether a line holds only spaces, tabs and a carriage
-// return.
+// return. This is the only place a bare carriage return counts as blank.
 func isBlank(line string) bool {
 	for i := 0; i < len(line); i++ {
 		if c := line[i]; c != ' ' && c != '\t' && c != '\r' {
@@ -46,7 +48,7 @@ func isThematicBreak(line string) bool {
 		switch line[i] {
 		case '-', '*':
 			marks++
-		case ' ', '\t', '\r':
+		case ' ', '\t':
 		default:
 			return false
 		}
@@ -77,7 +79,7 @@ func isCodeFence(line string) (fenceInfo, bool) {
 	if length < 3 {
 		return fenceInfo{}, false
 	}
-	lang := strings.Trim(rest[length:], " \t\r")
+	lang := strings.Trim(rest[length:], " \t")
 	if strings.ContainsAny(lang, " \t") || strings.IndexByte(lang, '`') >= 0 {
 		return fenceInfo{}, false
 	}
@@ -101,7 +103,7 @@ func headingLevel(trimmed string) int {
 	if n == 0 || n > 6 {
 		return 0
 	}
-	if n < len(trimmed) && !isSpaceOrTab(trimmed[n]) && trimmed[n] != '\r' {
+	if !spaceOrEnd(trimmed, n) {
 		return 0
 	}
 	return n
@@ -111,7 +113,7 @@ func headingLevel(trimmed string) int {
 // the indent, then a space, a tab or the line's end.
 func startsBlockQuote(line string) bool {
 	rest := line[countIndent(line):]
-	return rest != "" && rest[0] == '>' && (len(rest) == 1 || isSpaceOrTab(rest[1]) || rest[1] == '\r')
+	return rest != "" && rest[0] == '>' && spaceOrEnd(rest, 1)
 }
 
 // divInfo describes a fenced div's opening line: the colon fence and what
@@ -129,7 +131,7 @@ func isFencedDivStart(line string) (divInfo, bool) {
 	if n < 3 {
 		return divInfo{}, false
 	}
-	return divInfo{fence: rest[:n], class: strings.Trim(rest[n:], " \t\r")}, true
+	return divInfo{fence: rest[:n], class: strings.Trim(rest[n:], " \t")}, true
 }
 
 // closesDiv reports whether a line closes a div opened with fenceLen
@@ -198,7 +200,7 @@ func parseDefinitionLabel(line string) (definitionLabel, bool) {
 	}
 	after := close + 2
 	d := definitionLabel{label: rest[1:close]}
-	d.spaced = after == len(rest) || isSpaceOrTab(rest[after]) || rest[after] == '\r'
+	d.spaced = spaceOrEnd(rest, after)
 	if len(d.label) > 1 && d.label[0] == '^' {
 		d.label, d.isFootnote = d.label[1:], true
 	}
@@ -266,7 +268,7 @@ func rowCells(line string) []string {
 }
 
 func tableRowCells(line string) ([]string, bool) {
-	rest := strings.TrimRight(line[countIndent(line):], " \t\r")
+	rest := strings.TrimRight(line[countIndent(line):], " \t")
 	if rest == "" || rest[0] != '|' {
 		return nil, false
 	}
@@ -428,7 +430,7 @@ func isTaskItem(rest string) bool {
 	if len(rest) < 3 || rest[0] != '[' || rest[2] != ']' || (rest[1] != ' ' && rest[1] != 'x' && rest[1] != 'X') {
 		return false
 	}
-	return len(rest) == 3 || isSpaceOrTab(rest[3]) || rest[3] == '\r'
+	return spaceOrEnd(rest, 3)
 }
 
 // parseBulletMarker reports whether a line opens a bullet item: '-', '+' or
@@ -512,13 +514,13 @@ func parseOrderedMarker(line string) (marker, bool) {
 // afterMarker is the text after a marker of the given width and the one
 // space or tab that must follow it, unless the marker ends the line.
 func afterMarker(rest string, width int) (string, bool) {
-	switch {
-	case width == len(rest) || (width+1 == len(rest) && rest[width] == '\r'):
-		return "", true
-	case isSpaceOrTab(rest[width]):
-		return rest[width+1:], true
+	if !spaceOrEnd(rest, width) {
+		return "", false
 	}
-	return "", false
+	if width == len(rest) {
+		return "", true
+	}
+	return rest[width+1:], true
 }
 
 func romanStyle(c byte) listStyle {
@@ -538,6 +540,11 @@ func alphaStyle(c byte) listStyle {
 func isDigit(c byte) bool       { return c >= '0' && c <= '9' }
 func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func isSpaceOrTab(c byte) bool  { return c == ' ' || c == '\t' }
+
+// spaceOrEnd reports whether s ends at i or holds a space or tab there: what
+// may follow a block marker. A bare carriage return is not one; only isBlank
+// treats it as blank, as zjot's leaf.zig does.
+func spaceOrEnd(s string, i int) bool { return i >= len(s) || isSpaceOrTab(s[i]) }
 
 // getListStart is the number an ordered list starts at, given its first
 // marker's text and the style it settled on; 1 when a decimal number does

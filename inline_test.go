@@ -150,7 +150,7 @@ func TestLeafInlinesEndsLine(t *testing.T) {
 		{"`a  ", false, "`a  `"},
 		{"x ` ", true, "x ``"},
 	} {
-		nodes, _ := parseLeafInlines(tt.src, 0, tt.endsLine)
+		nodes, _, _ := parseLeafInlines(tt.src, 0, tt.endsLine)
 		if got := inlineText(nodes); got != tt.want {
 			t.Errorf("parseLeafInlines(%q, endsLine=%v) = %q, want %q", tt.src, tt.endsLine, got, tt.want)
 		}
@@ -183,7 +183,7 @@ func inlineText(nodes []*Node) string {
 }
 
 func TestStringContent(t *testing.T) {
-	nodes, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true)
+	nodes, _, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true)
 	for _, tt := range []struct {
 		labels bool
 		want   string
