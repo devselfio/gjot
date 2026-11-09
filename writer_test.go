@@ -381,6 +381,8 @@ func TestWriterAttributeOrderAndEmptyID(t *testing.T) {
 		{"{k=v #i .c}\n> q\n", "{k=\"v\" #i .c}\n> q\n"},
 		{"{id=\"\"}\npara [a]{id=\"\"}\n\n> {id=\"\"}\n> # h\n", "{id=\"\"}\npara [a]{id=\"\"}\n\n> {id=\"\"}\n> # h\n"},
 		{"{.x}\n::: y\nz\n:::\n", "{.x}\n::: y\nz\n:::\n"},
+		{"{.y k=v}\n:::\nz\n:::\n", "{.y k=\"v\"}\n:::\nz\n:::\n"},
+		{"{.y}\n{k=v}\n::: w\nz\n:::\n", "{.y .w k=\"v\"}\n:::\nz\n:::\n"},
 		{"$`m`{#i .a k=v} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n", "$`m`{#i .a k=\"v\"} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n"},
 		{"x[^n]{.a}\n\n[^n]: n\n", "x[^1]{.a}\n\n[^1]: n\n"},
 	}

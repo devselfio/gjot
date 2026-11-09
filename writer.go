@@ -393,7 +393,7 @@ func withoutBacklink(blocks []*Node) []*Node {
 func attrSet(n *Node) string {
 	attrs := n.renderedAttrs()
 	if n.Tag == Div {
-		attrs = withoutLastClass(attrs)
+		attrs = withoutLastClass(attrs, divFenceClass(n))
 	}
 	var parts []string
 	if n.ID != "" && !n.AutoID && !hasKey(attrs, "id") {
@@ -444,11 +444,16 @@ func allWords(words []string, ok func(byte) bool) bool {
 }
 
 // divFenceClass is the class a div's fence carries: the last of its
-// classes, when it is one the fence may name; the block attribute before
-// the fence joins the rest before it (`{.x}` then `::: y` reads back as
-// `class="x y"`).
+// classes, when it is one the fence may name and the class entry is the
+// last attribute, since the fence class joins after the block attribute
+// before it (`{.x}` then `::: y` reads back as `class="x y"`; `{.y k=v}`
+// then `:::` keeps its order only with `.y` in the attribute line).
 func divFenceClass(n *Node) string {
-	words := strings.Fields(valueOf(n.renderedAttrs(), "class"))
+	attrs := n.renderedAttrs()
+	if len(attrs) == 0 || attrs[len(attrs)-1].Key != "class" {
+		return ""
+	}
+	words := strings.Fields(attrs[len(attrs)-1].Value)
 	if len(words) == 0 || !divClass(words[len(words)-1]) {
 		return ""
 	}
@@ -456,21 +461,15 @@ func divFenceClass(n *Node) string {
 }
 
 // withoutLastClass is attrs with the class divFenceClass writes on the
-// fence taken off; the class entry goes when it was the only one.
-func withoutLastClass(attrs []Attr) []Attr {
-	var out []Attr
-	for _, a := range attrs {
-		if a.Key != "class" {
-			out = append(out, a)
-			continue
-		}
-		words := strings.Fields(a.Value)
-		if len(words) > 0 && divClass(words[len(words)-1]) {
-			words = words[:len(words)-1]
-		}
-		if len(words) > 0 {
-			out = append(out, Attr{"class", strings.Join(words, " ")})
-		}
+// fence taken off; the class entry goes when that was its only class.
+func withoutLastClass(attrs []Attr, fenceClass string) []Attr {
+	if fenceClass == "" {
+		return attrs
+	}
+	out := append([]Attr{}, attrs[:len(attrs)-1]...)
+	last := attrs[len(attrs)-1]
+	if words := strings.Fields(last.Value); len(words) > 1 {
+		out = append(out, Attr{"class", strings.Join(words[:len(words)-1], " ")})
 	}
 	return out
 }

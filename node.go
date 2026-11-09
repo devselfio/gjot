@@ -114,10 +114,12 @@ type Range struct {
 // `id=""` included, which renders and names nothing), the classes are one
 // "class" entry (a div's fence class joined to them), and a key keeps its
 // first position with its last value. ID is the id the document gave the
-// node: the non-empty written id, or a heading's generated one (AutoID).
-// Renderers write a written id where it stands and an unwritten ID first.
-// Parse never sets Classes; renderers read it as the class list of a node
-// built without a "class" entry.
+// node: the non-empty written id, or a heading's generated one (AutoID), or
+// a footnote reference's fnrefN. Renderers write a written id where it
+// stands and an unwritten ID first; a footnote reference's HTML writes its
+// fnrefN only and drops a written id (zjot.test difference 3). Parse never
+// sets Classes; renderers read it as the class list of a node built without
+// a "class" entry.
 type Node struct {
 	Tag         Tag       `json:"tag"`
 	Children    []*Node   `json:"children,omitempty"`
