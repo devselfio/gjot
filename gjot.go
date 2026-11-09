@@ -1,5 +1,18 @@
 package gjot
 
+import "errors"
+
+// MaxNesting is how deep the parser nests: at most MaxNesting block
+// containers (block quotes, divs, lists and their items, footnote
+// definitions, ...) and, inside a leaf, at most MaxNesting inline elements.
+// A block marker or inline opener that would nest deeper is text. zjot's
+// limit is the same number.
+const MaxNesting = 1000
+
+// ErrTooDeep is ParseErr's error when the source nested past MaxNesting and
+// the parser stopped nesting there.
+var ErrTooDeep = errors.New("gjot: nesting deeper than MaxNesting")
+
 // ParseOption configures Parse.
 type ParseOption func(*parseConfig)
 
@@ -13,13 +26,25 @@ func WithSourcePos() ParseOption {
 }
 
 // Parse parses Djot source into an AST. It never fails: every byte sequence
-// is a Djot document.
+// is a Djot document. Nesting past MaxNesting is read as text; ParseErr
+// reports it.
 func Parse(src []byte, opts ...ParseOption) *Node {
+	doc, _ := ParseErr(src, opts...)
+	return doc
+}
+
+// ParseErr is Parse that also reports ErrTooDeep when the source nested past
+// MaxNesting. The tree is returned either way and is the one Parse returns.
+func ParseErr(src []byte, opts ...ParseOption) (*Node, error) {
 	var cfg parseConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return parseStack(string(src), cfg.sourcePos)
+	doc, tooDeep := parseStack(string(src), cfg.sourcePos)
+	if tooDeep {
+		return doc, ErrTooDeep
+	}
+	return doc, nil
 }
 
 // HTMLOption configures HTML.

@@ -91,6 +91,8 @@ type inlineParser struct {
 	// noFootnoteBefore: no footnote reference opens before here
 	// (footnoteRefEnd).
 	noFootnoteBefore int
+	// tooDeep: an opener was refused at MaxNesting (mayOpen).
+	tooDeep bool
 }
 
 func parseInlines(lines []string) []*Node {
@@ -101,7 +103,7 @@ func parseInlines(lines []string) []*Node {
 }
 
 func parseInlineContent(src string) []*Node {
-	nodes, _ := parseLeafInlines(src, 0, true)
+	nodes, _, _ := parseLeafInlines(src, 0, true)
 	return nodes
 }
 
@@ -109,10 +111,11 @@ func parseInlineContent(src string) []*Node {
 // attribute is read at an offset before attrsFrom, endsLine says whether a
 // line end follows src, and the ids of inline attributes that attached to
 // no node (or that a later id replaced) are returned rather than lost.
-func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string) {
+// tooDeep says an opener was refused at MaxNesting (mayOpen).
+func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string, tooDeep bool) {
 	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
 	nodes = p.parse()
-	return nodes, p.dropped
+	return nodes, p.dropped, p.tooDeep
 }
 
 // strNode is a text node sliced from the inline source at off.
@@ -160,6 +163,17 @@ func (p *inlineParser) pushNode(n *Node) {
 func (p *inlineParser) pushOpener(op openerInfo) {
 	p.openers = append(p.openers, op)
 	p.items = append(p.items, inlineItem{kind: itemOpener, opener: op})
+}
+
+// mayOpen reports whether another opener may be pushed: MaxNesting are
+// open at most, so the inlines of a leaf nest at most MaxNesting deep. A
+// delimiter refused here is what it is when it cannot open.
+func (p *inlineParser) mayOpen() bool {
+	if len(p.openers) >= MaxNesting {
+		p.tooDeep = true
+		return false
+	}
+	return true
 }
 
 // addText appends the source slice text at off, extending the previous node
@@ -261,7 +275,11 @@ func (p *inlineParser) parse() []*Node {
 					continue
 				case '+', '-', '=':
 					p.flushText()
-					p.pushOpener(openerInfo{char: next, itemIdx: len(p.items), srcPos: p.pos, marked: true})
+					if p.mayOpen() {
+						p.pushOpener(openerInfo{char: next, itemIdx: len(p.items), srcPos: p.pos, marked: true})
+					} else {
+						p.addText(src[p.pos:p.pos+2], p.pos)
+					}
 					p.pos += 2
 					p.textStart = p.pos
 					continue
@@ -292,8 +310,11 @@ func (p *inlineParser) parse() []*Node {
 				p.textStart = p.pos
 				continue
 			}
-			// The bracket is an item of its own: the opener's index points at it.
-			p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
+			// The bracket is an item of its own: the opener's index points
+			// at it. Refused at MaxNesting it is a bracket with no opener.
+			if p.mayOpen() {
+				p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
+			}
 			p.pushNode(strNode(src[p.pos:p.pos+1], p.pos))
 			p.pos++
 			p.textStart = p.pos
@@ -303,7 +324,9 @@ func (p *inlineParser) parse() []*Node {
 			// already matched.
 			if p.pos+1 < len(src) && src[p.pos+1] == '[' && p.footnoteRefEnd(p.pos+1) < 0 {
 				p.flushText()
-				p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
+				if p.mayOpen() {
+					p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
+				}
 				p.pushNode(strNode(src[p.pos:p.pos+2], p.pos))
 				p.pos += 2
 				p.textStart = p.pos
@@ -640,7 +663,12 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 	}
 
 	if marked || canOpenDelim(src, pos) {
-		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
+		start := openerStart(pos, marked)
+		if p.mayOpen() {
+			p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: start, marked: marked})
+		} else {
+			p.addText(src[start:pos+1], start)
+		}
 		p.pos = pos + 1
 		return
 	}
@@ -978,6 +1006,14 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 		}
 	}
 
+	if canOpen && !p.mayOpen() {
+		// Refused at MaxNesting: the quote is a literal, and a marked
+		// one's brace text before it.
+		if marked {
+			p.addText(src[pos-1:pos], pos-1)
+		}
+		canOpen = false
+	}
 	if canOpen {
 		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 	} else if char == '\'' {
