@@ -1,6 +1,7 @@
 package gjot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -426,5 +427,41 @@ func TestInlineAttributeAttachment(t *testing.T) {
 	}
 	if want := "<p>“a</p>\n"; string(html) != want {
 		t.Errorf("HTML = %q, want %q", html, want)
+	}
+}
+
+// The opener stack keeps its pairing when openers are looked up by kind:
+// unclosed marked openers stay below the closers, and the bracket lookup
+// still keeps a closer in an open destination from an opener before the
+// link. The outputs are what main printed before the index by kind.
+func TestInlineOpenerStackShape(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{strings.Repeat("{_", 3) + strings.Repeat("x*", 3) + "\n", "<p>{_{_{_x<strong>x</strong>x*</p>\n"},
+		{"[a](b*) *c*\n", "<p><a href=\"b*\">a</a> <strong>c</strong></p>\n"},
+		{"*[a](b*)\n", "<p>*<a href=\"b*\">a</a></p>\n"},
+	}
+	for _, tt := range tests {
+		got, err := HTML(Parse([]byte(tt.src)))
+		if err != nil {
+			t.Fatalf("%q: %v", tt.src, err)
+		}
+		if string(got) != tt.want {
+			t.Errorf("%q:\n got %q\nwant %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+// BenchmarkInlineOpenerStack is the input of the brief's "gjot hardened"
+// (swarm-gridapp/briefs/m0-libraries.md): n marked "_" openers that never
+// close, then n "*" closers, each of which used to scan past all of them.
+// With openers indexed by kind, ns/op grows linearly with n.
+func BenchmarkInlineOpenerStack(b *testing.B) {
+	for _, n := range []int{10000, 20000, 40000} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			src := []byte(strings.Repeat("{_", n) + strings.Repeat("x*", n))
+			for b.Loop() {
+				Parse(src)
+			}
+		})
 	}
 }
