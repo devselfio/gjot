@@ -26,3 +26,6 @@ jobs:
 
       - name: spec pass count
         run: make spec-count
+
+      - name: spec drift
+        run: make spec-drift
