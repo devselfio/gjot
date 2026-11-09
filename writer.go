@@ -635,7 +635,9 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
 		w.write("{}")
 	}
 	out, wrote := w.escapeText(text, next, apos, bounds)
-	w.rawQuote['\''] = w.rawQuote['\''] || wrote
+	if wrote {
+		w.rawQuote['\''] = true
+	}
 	w.write(out)
 }
 
@@ -682,8 +684,10 @@ func (w *inlineWriter) quote(n *Node) {
 
 // adopt takes over the lone quotes an inner writer wrote (see rawQuote).
 func (w *inlineWriter) adopt(inner *inlineWriter) {
-	for q := range inner.rawQuote {
-		w.rawQuote[q] = true
+	for q, set := range inner.rawQuote {
+		if set {
+			w.rawQuote[q] = true
+		}
 	}
 }
 

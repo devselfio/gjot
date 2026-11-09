@@ -93,9 +93,9 @@ the inline nodes inside them. A definition list item's term and definition
 carry none, as zjot's AST prints none; the footnote section built at the end
 does not yet.
 
-Two things the writer cannot express, because the syntax has no form for them:
-an empty verbatim span in the middle of a paragraph (it is written as a trailing
-unclosed backtick) and math whose content starts or ends with a backtick.
+One thing the writer cannot express, because the syntax has no form for it: an
+empty verbatim or math span in the middle of a paragraph (it is written as a
+trailing unclosed backtick).
 
 ## Tests
 

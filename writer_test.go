@@ -62,6 +62,8 @@ func TestWriterInlineEdges(t *testing.T) {
 		// quote it is written as is markup to the text before it.
 		"\"{#i}a and 'b{.c}\n\n# i\n",
 		"a\\\\\"{.c}b and \"c\"{.d} and \"{.e}f{\"g\"}\n",
+		// A lone ’ inside a plain pair, which stays plain: '} closes a braced one.
+		"'_x '{.c}_ z' and '[x '{.c}](y) z' and it's '[a '{.c}](b)'\n",
 		"[a](b\\)c) and [x][] and [y][z] and ![i](j){.k}\n",
 		// A destination's bytes the forward pass would consume or close on.
 		"[a](b`)`) and [c](<http://x)>) and [d](e\\[f\\]g) and ![h](i\\(j) and [k](l\\{m)\n",
