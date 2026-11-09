@@ -230,6 +230,8 @@ func (p *inlineParser) push(op openerInfo) {
 	p.openers = append(p.openers, op)
 }
 
+// pushOpener pushes op and records it as an item. Only the stack's copy
+// is chained by kind: the item's copy has no prevSame, and nothing reads it.
 func (p *inlineParser) pushOpener(op openerInfo) {
 	p.push(op)
 	p.items = append(p.items, inlineItem{kind: itemOpener, opener: op})

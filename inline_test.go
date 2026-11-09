@@ -433,7 +433,9 @@ func TestInlineAttributeAttachment(t *testing.T) {
 // The opener stack keeps its pairing when openers are looked up by kind:
 // unclosed marked openers stay below the closers, and the bracket lookup
 // still keeps a closer in an open destination from an opener before the
-// link. The outputs are what main printed before the index by kind.
+// link. The outputs are what main printed before the index by kind: this
+// is the semantic guard and passes on either lookup, while
+// TestInlineOpenerIndexByKind guards the index itself.
 func TestInlineOpenerStackShape(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{strings.Repeat("{_", 3) + strings.Repeat("x*", 3) + "\n", "<p>{_{_{_x<strong>x</strong>x*</p>\n"},
@@ -503,8 +505,10 @@ func TestInlineOpenerIndexByKind(t *testing.T) {
 
 // BenchmarkInlineOpenerStack is the input of the brief's "gjot hardened"
 // (swarm-gridapp/briefs/m0-libraries.md): n marked "_" openers that never
-// close, then n "*" closers, each of which used to scan past all of them.
-// With openers indexed by kind, ns/op grows linearly with n.
+// close, then n "*" delimiters, each of which looks up the nearest "*"
+// opener. MaxNesting keeps at most 1000 openers open, so a scanning
+// lookup passes up to 1000 of them per delimiter; with openers indexed by
+// kind the lookup is one read, and ns/op grows linearly with n.
 func BenchmarkInlineOpenerStack(b *testing.B) {
 	for _, n := range []int{10000, 20000, 40000} {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
