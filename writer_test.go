@@ -262,8 +262,15 @@ func TestWriterTextEscapes(t *testing.T) {
 		{"comment-closed-by-later-brace", "x {%a *b* c\\['\n", "x \\{%a *b* c\\[{}\u2019\n", true},
 		{"brace-before-soft-break-then-comment", "x {\n%\\+\n", "x \\{\n%{}+\n", true},
 		{"brace-before-verbatim-attribute", "a { .c `x`\n", "a { .c `x`\n", false},
-		{"brace-before-emph-attribute", "a {.c _x_\n", "a {.c _x_\n", false},
+		{"brace-before-emph-attribute", "a {.c _x_\n", "a \\{.c _x_\n", true},
 		{"comment-closed-by-trailing-attribute", "a \\{% b {}\n", "a \\{% b {}\n", false},
+		{"quoted-value-then-comment-closed-later", "x {k=\"v\" %a *b* c\\['\n", "x \\{k=\"v\" %a *b* c\\[{}\u2019\n", true},
+		{"quoted-value-before-soft-break", "x {k=\"v\"\n%\\+\n", "x \\{k=\"v\"\n%{}+\n", true},
+		// At a line's start a marked opener's brace is escaped: the line
+		// could read as a block attribute.
+		{"marked-opener-at-line-start", "\\{-k=v}\nb\n", "\\{-k=v}\nb\n", false},
+		{"marked-opener-at-item-start", "- \\{_a=b}\n", "- \\{_a=b}\n", false},
+		{"marked-opener-at-line-start-from-comment", "{-k=v}{%c%}\n", "\\{-k=v}\n", false},
 		{"raw-format-after-verbatim-is-text", "x `a`\\{=html} y\n", "x `a`\\{=html} y\n", false},
 		{"brace-then-escaped-delimiter", "{\\_\n", "\\{\\_\n", false},
 		{"bracket-before-boundary-attribute", "+][ ]'\n", "\\+][ \\]{}\u2019\n", true},

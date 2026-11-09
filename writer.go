@@ -856,8 +856,10 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 				!(i == 0 && w.prev() == '`' && inRun[0] == '=')
 			if marked {
 				// Inside a marked pair of the same delimiter, a raw marked
-				// opener would take the pair's closer.
-				escape = braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
+				// opener would take the pair's closer; at a line's start a
+				// run that has not failed as an attribute by its end could
+				// read as a block attribute ("_" and "-" are key bytes).
+				escape = i == 0 && w.lineStart && attrOpen(text) || braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
 				if !escape {
 					w.openMarked[inRun[0]]++
 					b.WriteByte(c)
@@ -1052,20 +1054,15 @@ func braceOpensMarkup(tail string, run int) bool {
 // attrsCouldClose reports whether a raw brace followed by tail (the rest
 // of its run and what follows the run) could read as an attribute closed
 // by a "}" written later (an attribute set, a braced pair, a kept
-// boundary): the attribute parses up to where tail ends, or a comment
-// opens, which takes anything. A brace before a node whose first bytes are
-// unknown is taken to. No "}" comes after a leaf's last run, unless it ends
-// in a space, which leafLines keeps with an empty attribute.
+// boundary): the attribute parser has not failed by the end of tail (a
+// brace before a node whose first bytes are unknown is taken to). No "}"
+// comes after a leaf's last run, unless it ends in a space, which
+// leafLines keeps with an empty attribute.
 func (w *inlineWriter) attrsCouldClose(tail string, next *Node) bool {
 	if next == nil && w.closer == "" && !strings.HasSuffix(tail, " ") {
 		return false
 	}
-	rest := strings.TrimLeft(tail, " \t\n")
-	if rest == "" || rest[0] == '%' {
-		return true
-	}
-	_, _, ok := parseInlineAttrs("{"+tail+"}", 0)
-	return ok
+	return attrOpen("{" + tail)
 }
 
 // bracketCloses reports whether a raw "]" followed by tail would close an
