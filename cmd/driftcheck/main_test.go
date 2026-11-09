@@ -156,25 +156,68 @@ func TestParseOriginRealFile(t *testing.T) {
 }
 
 // TestWorkflowRunsDriftcheck keeps the drift check in CI: the check job
-// must run make spec-drift after make spec-count. A plain string search,
+// must run make spec-drift after make spec-count. A plain line search,
 // since gjot has no YAML dependency.
 func TestWorkflowRunsDriftcheck(t *testing.T) {
 	b, err := os.ReadFile("../../.github/workflows/ci.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(b)
-	count := strings.Index(s, "run: make spec-count")
-	if count < 0 {
-		t.Fatal(`"run: make spec-count" not found in .github/workflows/ci.yml`)
+	if err := checkWorkflowSteps(string(b)); err != nil {
+		t.Fatalf(".github/workflows/ci.yml: %v", err)
 	}
-	drift := strings.Index(s, "run: make spec-drift")
-	if drift < 0 {
-		t.Fatal(`"run: make spec-drift" not found in .github/workflows/ci.yml`)
+}
+
+// TestCheckWorkflowSteps pins what checkWorkflowSteps accepts: only an
+// active run line counts, so a commented-out step does not.
+func TestCheckWorkflowSteps(t *testing.T) {
+	const count = "      - name: spec pass count\n        run: make spec-count\n"
+	const drift = "      - name: corpus drift check\n        run: make spec-drift\n"
+	cases := []struct {
+		name, in string
+		ok       bool
+	}{
+		{"step after spec-count", count + drift, true},
+		{"step missing", count, false},
+		{"step before spec-count", drift + count, false},
+		{"step commented out", count + "      # - name: corpus drift check\n      #   run: make spec-drift\n", false},
+		{"run line commented out", count + "      - name: corpus drift check\n        # run: make spec-drift\n", false},
+		{"spec-count commented out", "        # run: make spec-count\n" + drift, false},
+		{"other target with same prefix", count + "        run: make spec-drift-later\n", false},
 	}
-	if drift < count {
-		t.Fatal(`"run: make spec-drift" comes before "run: make spec-count" in .github/workflows/ci.yml`)
+	for _, c := range cases {
+		err := checkWorkflowSteps(c.in)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: got err %v, want ok=%v", c.name, err, c.ok)
+		}
 	}
+}
+
+// checkWorkflowSteps reports whether workflow has an active
+// "run: make spec-drift" line after an active "run: make spec-count" line.
+// A line counts only when, trimmed, it is exactly that text, so comments
+// and other targets do not.
+func checkWorkflowSteps(workflow string) error {
+	count, drift := -1, -1
+	for i, line := range strings.Split(workflow, "\n") {
+		switch strings.TrimSpace(line) {
+		case "run: make spec-count":
+			if count < 0 {
+				count = i
+			}
+		case "run: make spec-drift":
+			drift = i
+		}
+	}
+	switch {
+	case count < 0:
+		return errors.New(`no "run: make spec-count" step`)
+	case drift < 0:
+		return errors.New(`no "run: make spec-drift" step`)
+	case drift < count:
+		return errors.New(`"run: make spec-drift" comes before "run: make spec-count"`)
+	}
+	return nil
 }
 
 func TestParseOriginErrors(t *testing.T) {
