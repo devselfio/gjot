@@ -16,6 +16,9 @@ go build ./...
 make build      # the same, as CI runs it
 ```
 
+`make help` lists every target CI runs, including the drift check,
+`make spec-drift` (see Tests).
+
 ## CLI usage
 
 ```
@@ -119,9 +122,9 @@ make test       # the same, as CI runs it
 make check      # gofmt (fails listing unformatted files), go vet, go mod tidy -diff
 ```
 
-CI runs `make check`, `make build`, `make test` and `make spec-count` on every
-push to `main` and every pull request; `make spec-drift` is the step CI adds
-next. `make help` lists the targets.
+CI runs `make check`, `make build`, `make test`, `make spec-count` and
+`make spec-drift` on every push to `main` and every pull request. `make help`
+lists the targets.
 
 `TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
 of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
@@ -153,7 +156,11 @@ online. `go run ./cmd/driftcheck -record` writes `SHA256SUMS` after an online
 match with zjot at the pinned tag; `go run ./cmd/driftcheck REF` measures the
 gap to another ref without moving the pin. `go test ./cmd/driftcheck` covers all
 of it against local test servers, and its `TestRecordRealCorpus` runs the
-offline check on the real corpus.
+offline check on the real corpus. CI runs `make spec-drift` as the last step of
+the `check` job, where the network answers, so it fetches zjot at the tag;
+bumping `Ref:` without re-recording the corpus is the one way to turn that step
+red on purpose. `TestWorkflowRunsDriftcheck` fails if that step leaves the
+workflow.
 
 ## Architecture
 
