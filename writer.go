@@ -494,10 +494,13 @@ type inlineWriter struct {
 	closer     string
 	inBrackets bool
 	prevDash   bool // the previous node was a dash
-	// apostrophe is set once a ’ has been written as ' in this writer's
-	// output, its inner writers' included; an enclosing SingleQuoted is then
-	// braced, so that ' cannot close it.
-	apostrophe bool
+	// rawQuote is set, per quote, once one has been written raw in this
+	// writer's output or its inner writers' where a plain closer reaches
+	// it: a ’ written as ' (an apostrophe) or a lone quote that opens
+	// (loneQuote). An enclosing plain pair of that quote is then braced, so
+	// that the apostrophe does not close it and its closer does not close
+	// the lone quote instead.
+	rawQuote map[byte]bool
 }
 
 // leafLines is the lines of a paragraph, heading or caption, whose end the
@@ -523,7 +526,7 @@ func (d *djotWriter) inlines(nodes []*Node) string {
 }
 
 func newInlineWriter(d *djotWriter, lineStart bool) *inlineWriter {
-	return &inlineWriter{d: d, lineStart: lineStart, open: map[byte]int{}, openMarked: map[byte]int{}}
+	return &inlineWriter{d: d, lineStart: lineStart, open: map[byte]int{}, openMarked: map[byte]int{}, rawQuote: map[byte]bool{}}
 }
 
 func (w *inlineWriter) write(s string) {
@@ -552,16 +555,17 @@ func isText(n *Node) bool { return n.Tag == Str || n.Tag == Escape }
 // and where each node after the first starts: the parser joins all the text
 // it can, so adjacent text nodes are a boundary it made (an escape, an
 // unclosed marked opener, an empty attribute, a smart quote's glyph) and
-// the written text keeps it.
+// the written text keeps it. A smart quote carrying attributes is not text
+// but a quote (loneQuote).
 func (w *inlineWriter) nodes(nodes []*Node) {
 	for i := 0; i < len(nodes); {
 		n := nodes[i]
 		j := i + 1
 		var next *Node
-		if isText(n) {
+		if isText(n) && loneQuote(n) == "" {
 			var text strings.Builder
 			var apos, bounds []int
-			for j = i; j < len(nodes) && isText(nodes[j]); j++ {
+			for j = i; j < len(nodes) && isText(nodes[j]) && loneQuote(nodes[j]) == ""; j++ {
 				t := nodes[j]
 				if t.Text == apostrophe && t.Source == "'" {
 					apos = append(apos, text.Len())
@@ -598,10 +602,11 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 	if content == "" {
 		content = "{}"
 	}
-	// A ' written for an apostrophe would close a plain ' opener; the parser
-	// matches a plain closer only against plain openers, so a braced quote
-	// keeps it an apostrophe.
-	braced := braceOnly || char == '\'' && inner.apostrophe ||
+	// A ' written for an apostrophe would close a plain ' opener, and a
+	// plain closer would close a lone quote of its kind written inside
+	// (loneQuote) instead of the pair; the parser matches a plain closer
+	// only against plain openers, so the braced form keeps the pair.
+	braced := braceOnly || inner.rawQuote[char] ||
 		isInlineSpace(content[0]) || isInlineSpace(content[len(content)-1]) ||
 		(w.open[char] > 0 && (nestedBraces || !isInlineSpace(w.prev()) && w.prev() != 0))
 	if braced && (strings.Contains(content, string(rune(char))+"}") || strings.Contains(content, "{"+string(rune(char)))) {
@@ -611,7 +616,7 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 		inner = w.content(n, char, true)
 		content = inner.b.String()
 	}
-	w.apostrophe = w.apostrophe || inner.apostrophe
+	w.adopt(inner)
 	d := string(rune(char))
 	if braced {
 		w.write("{" + d + content + d + "}")
@@ -630,8 +635,56 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
 		w.write("{}")
 	}
 	out, wrote := w.escapeText(text, next, apos, bounds)
-	w.apostrophe = w.apostrophe || wrote
+	w.rawQuote['\''] = w.rawQuote['\''] || wrote
 	w.write(out)
+}
+
+// loneQuote is how a smart quote carrying attributes is written: a spelling
+// that reads back as that quote's glyph paired with nothing, which its
+// attributes then attach to (as the glyph in text they would not: a text
+// node's last word takes them). A right quote is a marked closer with no
+// marked opener to close, a left one an opener that pairs with nothing
+// (the plain " and the marked {'). "" for any other node.
+func loneQuote(n *Node) string {
+	if !isSmartQuote(n) || attrSet(n) == "" {
+		return ""
+	}
+	switch n.Text {
+	case "\u201c":
+		return "\""
+	case "\u201d":
+		return "\"}"
+	case "\u2018":
+		return "{'"
+	default:
+		return "'}"
+	}
+}
+
+// quote writes a smart quote carrying attributes (loneQuote) and its
+// attributes. The plain opener is counted in open, so that a later plain
+// pair of the quote is braced where its opener would read as this one's
+// closer, and in rawQuote, so that an enclosing plain pair is braced too;
+// the marked opener is counted in openMarked. A right quote has one
+// spelling, which inside a braced pair of its quote closes that pair.
+func (w *inlineWriter) quote(n *Node) {
+	spelling := loneQuote(n)
+	w.write(spelling)
+	w.attrs(n)
+	switch spelling {
+	case "\"":
+		w.open['"']++
+		w.rawQuote['"'] = true
+	case "{'":
+		w.openMarked['\'']++
+	}
+}
+
+// adopt takes over the lone quotes an inner writer wrote (see rawQuote).
+func (w *inlineWriter) adopt(inner *inlineWriter) {
+	for q := range inner.rawQuote {
+		w.rawQuote[q] = true
+	}
 }
 
 func (w *inlineWriter) attrs(n *Node) {
@@ -643,7 +696,11 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 	case Str, Escape:
 		// nodes, node's only caller, writes text runs itself; this case is
 		// kept so that a text node is never silently dropped.
-		w.text(n.Text, nil, nil, next)
+		if loneQuote(n) != "" {
+			w.quote(n)
+		} else {
+			w.text(n.Text, nil, nil, next)
+		}
 	case SoftBreak:
 		w.write("\n")
 	case HardBreak:
@@ -682,10 +739,10 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 	case RawInline:
 		w.write(verbatim(n.Text) + "{=" + n.Lang + "}")
 	case InlineMath:
-		w.write("$" + ticks(n.Text))
+		w.write("$" + verbatim(n.Text))
 		w.attrs(n)
 	case DisplayMath:
-		w.write("$$" + ticks(n.Text))
+		w.write("$$" + verbatim(n.Text))
 		w.attrs(n)
 	case Link, Image:
 		if n.Tag == Image {
@@ -776,14 +833,14 @@ func (w *inlineWriter) child() *inlineWriter {
 	return inner
 }
 
-// bracketed writes link, image and span content. An apostrophe written
+// bracketed writes link, image and span content. A lone quote written
 // inside is reported to the enclosing writer (see delimited).
 func (w *inlineWriter) bracketed(children []*Node) {
 	inner := w.child()
 	inner.closer = "]"
 	inner.inBrackets = true
 	inner.nodes(children)
-	w.apostrophe = w.apostrophe || inner.apostrophe
+	w.adopt(inner)
 	w.write(inner.b.String())
 }
 
@@ -835,8 +892,8 @@ func ticks(text string) string {
 }
 
 // verbatim is ticks with a space of padding where the content touches the
-// fence with a backtick, which the parser strips again. Empty content can
-// only be written as an unclosed trailing backtick.
+// fence with a backtick, which the parser strips again (from math too).
+// Empty content can only be written as an unclosed trailing backtick.
 func verbatim(text string) string {
 	if text == "" {
 		return "`"
@@ -1213,12 +1270,12 @@ const apostrophe = "’"
 // apostropheAfter reports whether a ' written after prev, a letter, a digit
 // or _, reads back as an apostrophe. It cannot open: canOpenSingleQuote
 // allows none of them before it. As a plain closer it matches only a plain '
-// opener: text ' is always escaped, so the only plain ' openers are
-// SingleQuoted delimiters, and delimited braces every SingleQuoted that
-// encloses such a ', through brackets too (inlineWriter.apostrophe). In
-// escapeText's output the character before the ' is prev itself (a letter
-// or digit is never escaped; _ is written \_), or the ' or ’ just written,
-// which does not qualify.
+// opener: text ' is always escaped and a lone ’ is written as '} (loneQuote),
+// so the only plain ' openers are SingleQuoted delimiters, and delimited
+// braces every SingleQuoted that encloses such a ', through brackets too
+// (inlineWriter.rawQuote). In escapeText's output the character before the
+// ' is prev itself (a letter or digit is never escaped; _ is written \_), or
+// the ' or ’ just written, which does not qualify.
 func apostropheAfter(prev rune) bool {
 	return unicode.IsLetter(prev) || unicode.IsDigit(prev) || prev == '_'
 }

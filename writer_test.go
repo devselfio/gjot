@@ -55,6 +55,13 @@ func TestWriterInlineEdges(t *testing.T) {
 		"^a^b^ and {^a{^b^}^} and ~x~\n",
 		"{+ins+}{-del-}{=mark=} and \\{+ no\n",
 		"`` `x` `` and ` `` ` and $`a`b$ and $$`m`\n",
+		// Math is verbatim: a backtick at either end needs its padding, and
+		// an unclosed one runs to the end (zjot.test L10724, L10873).
+		"$`` `a` `` and $`` `a`\n\nx $`a  \n\n$$`` ` \n",
+		// A smart quote's attributes are written, its id registered; the
+		// quote it is written as is markup to the text before it.
+		"\"{#i}a and 'b{.c}\n\n# i\n",
+		"a\\\\\"{.c}b and \"c\"{.d} and \"{.e}f{\"g\"}\n",
 		"[a](b\\)c) and [x][] and [y][z] and ![i](j){.k}\n",
 		// A destination's bytes the forward pass would consume or close on.
 		"[a](b`)`) and [c](<http://x)>) and [d](e\\[f\\]g) and ![h](i\\(j) and [k](l\\{m)\n",

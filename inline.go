@@ -456,19 +456,38 @@ func (p *inlineParser) handleBackticks() {
 	content := trimVerbatimContent(src[after:closePos])
 	afterClose := closePos + tickLen
 	p.pos = afterClose
-	if afterClose+1 < len(src) && src[afterClose] == '{' && src[afterClose+1] == '=' {
-		if fe := strings.IndexByte(src[afterClose:], '}'); fe >= 0 {
-			fe += afterClose
-			if format := src[afterClose+2 : fe]; format != "" && !strings.Contains(format, " ") {
-				p.pushNode(at(&Node{Tag: RawInline, Text: content, Lang: format}, pos, fe+1))
-				p.pos = fe + 1
-				return
-			}
-		}
+	if fe, ok := rawFormatEnd(src, afterClose); ok {
+		p.pushNode(at(&Node{Tag: RawInline, Text: content, Lang: src[afterClose+2 : fe]}, pos, fe+1))
+		p.pos = fe + 1
+		return
 	}
 	p.pushNode(at(&Node{Tag: Verbatim, Text: content}, pos, afterClose))
 }
 
+// rawFormatEnd is where a raw format opening at pos (`{=`) ends: its `}`,
+// with one or more bytes between other than blanks (JavaScript's \s),
+// braces and backticks, as djot.js's `\{=[^\s{}`]+\}`.
+func rawFormatEnd(src string, pos int) (int, bool) {
+	if pos+1 >= len(src) || src[pos] != '{' || src[pos+1] != '=' {
+		return 0, false
+	}
+	for i := pos + 2; i < len(src); {
+		r, n := utf8.DecodeRuneInString(src[i:])
+		switch {
+		case r == '}':
+			return i, i > pos+2
+		case r == '{' || r == '`' || isJSSpace(r):
+			return 0, false
+		}
+		i += n
+	}
+	return 0, false
+}
+
+// handleMath reads math as a verbatim with a dollar prefix: closed, its
+// content between the backtick runs; unclosed, to the leaf's end as an
+// unclosed verbatim (djot.js). Either way one space next to a backtick at
+// an end goes. A dollar without a backtick is text.
 func (p *inlineParser) handleMath() {
 	src, pos := p.src, p.pos
 	dollars := 1
@@ -476,21 +495,25 @@ func (p *inlineParser) handleMath() {
 		dollars = 2
 	}
 	tickStart := pos + dollars
-	if tickStart < len(src) && src[tickStart] == '`' {
-		tickLen := countRunAt(src, tickStart, '`')
-		contentStart := tickStart + tickLen
-		if closePos, ok := findClosingTicks(src, contentStart, tickLen); ok {
-			tag := InlineMath
-			if dollars == 2 {
-				tag = DisplayMath
-			}
-			p.pushNode(at(&Node{Tag: tag, Text: src[contentStart:closePos]}, pos, closePos+tickLen))
-			p.pos = closePos + tickLen
-			return
-		}
+	if tickStart >= len(src) || src[tickStart] != '`' {
+		p.addText(src[pos:pos+dollars], pos)
+		p.pos += dollars
+		return
 	}
-	p.addText(src[pos:pos+dollars], pos)
-	p.pos += dollars
+	tag := InlineMath
+	if dollars == 2 {
+		tag = DisplayMath
+	}
+	tickLen := countRunAt(src, tickStart, '`')
+	contentStart := tickStart + tickLen
+	if closePos, ok := findClosingTicks(src, contentStart, tickLen); ok {
+		p.pushNode(at(&Node{Tag: tag, Text: trimVerbatimContent(src[contentStart:closePos])}, pos, closePos+tickLen))
+		p.pos = closePos + tickLen
+		return
+	}
+	rest := p.unclosedRest(contentStart)
+	p.pushNode(at(&Node{Tag: tag, Text: trimVerbatimContent(rest)}, pos, contentStart+len(rest)))
+	p.pos = len(src)
 }
 
 // hardBreak pushes the hard break the backslash at pos makes, spanning the
@@ -524,9 +547,9 @@ func (p *inlineParser) trimLastText(end int, blanks string) {
 }
 
 // unclosedRest is the text from from to the end, the span an unclosed
-// verbatim takes: at a leaf's end its trailing spaces go, as text's would
-// (djot.js trims the last match before the closing newline; a cell has
-// none).
+// verbatim or math takes: at a leaf's end its trailing spaces go, as text's
+// would (djot.js trims the last match before the closing newline; a cell
+// has none).
 func (p *inlineParser) unclosedRest(from int) string {
 	rest := p.src[from:]
 	if p.endsLine {
@@ -1037,80 +1060,47 @@ func (p *inlineParser) resolveItems() []*Node {
 	return p.resolve(p.items)
 }
 
-func isWordSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }
+// isSmartQuote reports whether n is the glyph a smart quote that paired
+// with nothing left: text whose source is the quote it was written as.
+func isSmartQuote(n *Node) bool { return n.Tag == Str && n.Source != "" }
 
-// attachAttrs attaches ba to the node before it: a container node takes the
-// attributes directly; trailing text has its last word wrapped in a span,
-// gathering back across adjacent text nodes to the word's start. It also
-// reports the id the attributes registered and left on no node: theirs when
-// they attached to nothing, or the id they replaced on the node they
-// attached to.
+// attachAttrs attaches ba to the node before it: a text node's last word
+// becomes a span (the word after the last blank of any kind JavaScript's \s
+// counts, djot.js's `[^\s]+$`; no text across another node is gathered); a
+// container, verbatim, math, link, symbol, footnote reference or smart
+// quote takes the attributes itself; a break, dash, ellipsis or
+// non-breaking space takes none. It also reports the id the attributes
+// registered and left on no node: theirs when they attached to nothing, or
+// the id they replaced on the node they attached to.
 func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 	if len(nodes) == 0 {
 		return nodes, ba.id
 	}
 	last := nodes[len(nodes)-1]
-	switch last.Tag {
-	case Str:
+	if last.Tag == Str && !isSmartQuote(last) {
 		text := last.Text
-		if text == "" {
-			return nodes, ba.id
-		}
-		wordStart := len(text)
-		for wordStart > 0 && !isWordSpace(text[wordStart-1]) {
-			wordStart--
+		wordStart := 0
+		if i := strings.LastIndexFunc(text, isJSSpace); i >= 0 {
+			_, n := utf8.DecodeRuneInString(text[i:])
+			wordStart = i + n
 		}
 		if wordStart == len(text) {
 			return nodes, ba.id
 		}
-
-		gatherStart := len(nodes) - 1
-		if wordStart == 0 {
-			for gatherStart > 0 {
-				prev := nodes[gatherStart-1]
-				if prev.Tag != Str || prev.Text == "" || isWordSpace(prev.Text[len(prev.Text)-1]) {
-					break
-				}
-				gatherStart--
-				ws := len(prev.Text)
-				for ws > 0 && !isWordSpace(prev.Text[ws-1]) {
-					ws--
-				}
-				if ws > 0 {
-					wordStart = ws
-					break
-				}
-			}
-		}
-
-		var spanChildren []*Node
-		if gatherStart < len(nodes)-1 || wordStart > 0 {
-			if wordStart > 0 {
-				spanChildren = append(spanChildren, tail(nodes[gatherStart], wordStart))
-				spanChildren = append(spanChildren, nodes[gatherStart+1:]...)
-			} else {
-				spanChildren = append(spanChildren, nodes[gatherStart:]...)
-			}
-		} else {
-			spanChildren = append(spanChildren, tail(last, wordStart))
-		}
-
-		s := childrenSpan(spanChildren)
-		span := at(&Node{Tag: Span, Children: spanChildren}, s.start, s.end)
+		word := tail(last, wordStart)
+		ws := textSpan(word)
+		span := at(&Node{Tag: Span, Children: []*Node{word}}, ws.start, ws.end)
 		applyBlockAttrs(span, ba)
-
-		switch {
-		case wordStart > 0 && gatherStart < len(nodes)-1:
-			first := nodes[gatherStart]
-			first.Text = first.Text[:wordStart]
-			return append(nodes[:gatherStart+1], span), ""
-		case wordStart > 0:
+		if wordStart == 0 {
+			nodes[len(nodes)-1] = span
+		} else {
 			last.Text = text[:wordStart]
-			return append(nodes, span), ""
-		default:
-			return append(nodes[:gatherStart], span), ""
+			nodes = append(nodes, span)
 		}
-	case Span, Link, Image, Emph, Strong, Verbatim, Mark,
+		return nodes, ""
+	}
+	switch last.Tag {
+	case Str, Span, Link, Image, Emph, Strong, Verbatim, Mark,
 		Superscript, Subscript, Insert, Delete, DoubleQuoted, SingleQuoted,
 		URL, Email, InlineMath, DisplayMath, FootnoteReference, Symb:
 		replaced := ""
@@ -1382,24 +1372,13 @@ func mergeRefAttrs(n *Node, ref blockAttrs) {
 	n.Attrs = append(merged, n.Attrs...)
 }
 
-// childrenSpan is the extent from the first child's start to the last
-// child's end in the inline source, skipping children without one.
-func childrenSpan(children []*Node) srcSpan {
-	var span srcSpan
-	for _, c := range children {
-		s := c.src
-		if c.Tag == Str && c.off > 0 {
-			s = srcSpan{c.off - 1, c.off - 1 + len(c.Text)}
-		}
-		if s.end == 0 {
-			continue
-		}
-		if span.end == 0 {
-			span.start = s.start
-		}
-		span.end = s.end
+// textSpan is the extent of a text node in the inline source: of the slice
+// it is, or of the literal it stands for.
+func textSpan(n *Node) srcSpan {
+	if n.off > 0 {
+		return srcSpan{n.off - 1, n.off - 1 + len(n.Text)}
 	}
-	return span
+	return n.src
 }
 
 // inlineAttrs parses an inline attribute at pos, unless pos is before

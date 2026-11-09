@@ -65,11 +65,4 @@ zjot.test L10115
 zjot.test L10160
 zjot.test L10192
 zjot.test L10390
-zjot.test L10724
-zjot.test L10737
-zjot.test L10755
-zjot.test L10768
-zjot.test L10781
-zjot.test L10873
-zjot.test L10908
 zjot.test L10964

@@ -19,11 +19,12 @@ func TestInlinePositions(t *testing.T) {
 		{"word{.c} x\n", "span (1:1:0-1:4:3) class=\"c\"\n"},
 		{"word{.c} x\n", "str (1:1:0-1:4:3) text=\"word\"\n"},
 		// Attributes on literal text keep the literal's extent, on the
-		// word span and on the text inside it.
+		// word span and on the text inside it; a smart quote takes them
+		// itself.
 		{"]{.c}\n", "span (1:1:0-1:1:0) class=\"c\"\n"},
 		{"]{.c}\n", "str (1:1:0-1:1:0) text=\"]\"\n"},
 		{"*{.c}\n", "str (1:1:0-1:1:0) text=\"*\"\n"},
-		{"'{.c}\n", "str (1:1:0-1:1:0) text=\"’\"\n"},
+		{"'{.c}\n", "str (1:1:0-1:1:0) text=\"’\" class=\"c\"\n"},
 		{"![{.c}\n", "span (1:1:0-1:2:1) class=\"c\"\n"},
 		{"![{.c}\n", "str (1:1:0-1:2:1) text=\"![\"\n"},
 		{"a ]{.c}\n", "str (1:3:2-1:3:2) text=\"]\"\n"},
@@ -36,11 +37,12 @@ func TestInlinePositions(t *testing.T) {
 		{"> a\n> *b*\n", "strong (2:3:6-2:5:8)\n"},
 		// A backslash ending the leaf is a hard break on its newline; with
 		// blanks after it, from the first blank to the newline (zjot.test
-		// L5490, L9448). An unclosed verbatim ends before its trailing
-		// spaces (L10705).
+		// L5490, L9448). An unclosed verbatim or math ends before its
+		// trailing spaces (L10705, L10724).
 		{"a\\\n", "hard_break (2:0:2-2:0:2)\n"},
 		{"# foo\\ \n", "hard_break (1:7:6-2:0:7)\n"},
 		{"`a  \n", "verbatim (1:1:0-1:2:1) text=\"a\"\n"},
+		{"x $`a  \n", "inline_math (1:3:2-1:5:4)\n"},
 	}
 	for _, tt := range tests {
 		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
@@ -346,5 +348,85 @@ func TestInlineBracketsCloseForward(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%q\n got %q\nwant %q", tt.src, got, tt.want)
 		}
+	}
+}
+
+// Math is verbatim with a dollar prefix (zjot.test L10724, L10873): unclosed,
+// it runs to the leaf's end, losing trailing spaces as an unclosed verbatim
+// does; one space next to a backtick at either end goes, closed or not.
+func TestInlineMathIsVerbatim(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{"$`a\n", "<p><span class=\"math inline\">\\(a\\)</span></p>\n"},
+		{"$$`a b\n", "<p><span class=\"math display\">\\[a b\\]</span></p>\n"},
+		{"x $`a  \n", "<p>x <span class=\"math inline\">\\(a\\)</span></p>\n"},
+		{"$`` `a` ``\n", "<p><span class=\"math inline\">\\(`a`\\)</span></p>\n"},
+		{"$`` `a`\n", "<p><span class=\"math inline\">\\(`a`\\)</span></p>\n"},
+		{"$$`` `a`\n", "<p><span class=\"math display\">\\[`a`\\]</span></p>\n"},
+		{"$`` ` \n", "<p><span class=\"math inline\">\\(`\\)</span></p>\n"},
+		// A dollar without a backtick is text.
+		{"$a $$b\n", "<p>$a $$b</p>\n"},
+	}
+	for _, tt := range tests {
+		got, err := HTML(Parse([]byte(tt.src)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tt.want {
+			t.Errorf("%q\n got %q\nwant %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+// A raw format is `{=`, one or more bytes other than blanks (JavaScript's
+// \s), braces and backticks, and `}`, as djot.js; anything else after a
+// verbatim is text (zjot.test L10737).
+func TestRawFormatGrammar(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{"`a`{=html}\n", "raw_inline (1:1:0-1:10:9) text=\"a\" lang=\"html\"\n"},
+		{"`a`{=ht\nml}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n    str (1:4:3-1:7:6) text=\"{=ht\"\n"},
+		{"`a`{=h\tt}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n    str (1:4:3-1:9:8) text=\"{=h\\tt}\"\n"},
+		{"`a`{=h t}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n"},
+		{"`a`{=h{t}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n    str (1:4:3-1:9:8) text=\"{=h{t}\"\n"},
+		{"`a`{=h`t}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n"},
+		{"`a`{=}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n    str (1:4:3-1:6:5) text=\"{=}\"\n"},
+	}
+	for _, tt := range tests {
+		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+// An inline attribute attaches to the last word of the text node before it
+// (after the last blank JavaScript's \s counts, NBSP and ideographic space
+// included), gathering nothing across another node; a smart quote takes it
+// itself and renders none, its id registered all the same (zjot.test
+// L10755, L10768, L10781, L10908).
+func TestInlineAttributeAttachment(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{"a\\*b{.c}\n", "str text=\"a\"\n    span class=\"c\"\n      str text=\"*b\"\n"},
+		{"a{_b{.c}\n", "str text=\"a\"\n    span class=\"c\"\n      str text=\"{_b\"\n"},
+		{"a b{.c}\n", "str text=\"a \"\n    span class=\"c\"\n      str text=\"b\"\n"},
+		{"a　b{.c}\n", "str text=\"a　\"\n    span class=\"c\"\n      str text=\"b\"\n"},
+		{"a {.c}\n", "para\n    str text=\"a \"\n"},
+		{"\"{.c}*\n", "para\n    str text=\"“\" class=\"c\"\n    str text=\"*\"\n"},
+		{"\"a{.c}\n", "para\n    str text=\"“\"\n    span class=\"c\"\n      str text=\"a\"\n"},
+		{"x 'a{.c}\n", "str text=\"x \"\n    str text=\"’\"\n    span class=\"c\"\n      str text=\"a\"\n"},
+		{"\"{#i}a\n\n# i\n", "str text=\"“\" id=\"i\"\n    str text=\"a\"\n  section id=\"i-1\"\n"},
+	}
+	for _, tt := range tests {
+		got := string(ASTText(Parse([]byte(tt.src))))
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
+		}
+	}
+	// The smart quote's attributes render nothing.
+	html, err := HTML(Parse([]byte("\"{#i .c}a\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<p>“a</p>\n"; string(html) != want {
+		t.Errorf("HTML = %q, want %q", html, want)
 	}
 }
