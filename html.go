@@ -233,9 +233,14 @@ func (r *renderer) render(n *Node) {
 		r.children(n)
 		r.w("</table>\n")
 	case Caption:
-		r.w("<caption>")
-		r.children(n)
-		r.w("</caption>\n")
+		// Every table has one; an empty caption is not rendered.
+		if len(n.Children) > 0 {
+			r.w("<caption")
+			r.attrs(n)
+			r.w(">")
+			r.children(n)
+			r.w("</caption>\n")
+		}
 	case Row:
 		r.w("<tr>\n")
 		r.children(n)

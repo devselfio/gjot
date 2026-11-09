@@ -36,6 +36,10 @@ type inlineParser struct {
 	// attrsFrom: no inline attribute is read before this offset (the text a
 	// failed block attribute took, which djot.js reparses without them).
 	attrsFrom int
+	// endsLine: whether a line end follows src (a table cell's does not).
+	// Where one does, the trailing spaces and tabs of the last text go, as
+	// djot.js trims them before the newline.
+	endsLine bool
 	// dropped collects the ids of inline attributes left on no node, which
 	// were registered all the same (djot.js).
 	dropped   []string
@@ -53,16 +57,16 @@ func parseInlines(lines []string) []*Node {
 }
 
 func parseInlineContent(src string) []*Node {
-	nodes, _ := parseLeafInlines(src, 0)
+	nodes, _ := parseLeafInlines(src, 0, true)
 	return nodes
 }
 
 // parseLeafInlines is parseInlineContent for the container stack: no inline
-// attribute is read at an offset before attrsFrom, and the ids of inline
-// attributes that attached to no node (or that a later id replaced) are
-// returned rather than lost.
-func parseLeafInlines(src string, attrsFrom int) (nodes []*Node, droppedIDs []string) {
-	p := &inlineParser{src: src, attrsFrom: attrsFrom}
+// attribute is read at an offset before attrsFrom, endsLine says whether a
+// line end follows src, and the ids of inline attributes that attached to
+// no node (or that a later id replaced) are returned rather than lost.
+func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string) {
+	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
 	nodes = p.parse()
 	return nodes, p.dropped
 }
@@ -307,7 +311,9 @@ func (p *inlineParser) parse() []*Node {
 		}
 	}
 	p.flushText()
-	p.trimTrailingWhitespace()
+	if p.endsLine {
+		p.trimTrailingWhitespace()
+	}
 	return p.resolveItems()
 }
 

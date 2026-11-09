@@ -124,6 +124,21 @@ func TestStackUnits(t *testing.T) {
 		{"caption-with-no-table-is-dropped", "zjot.test L7478",
 			"^ alone\n\npara\n",
 			"<p>para</p>\n"},
+		{"caption-takes-waiting-block-attributes", "zjot.test L7573",
+			"| a |\n{.x}\n^ cap\n",
+			"<table>\n<caption class=\"x\">cap</caption>\n<tr>\n<td>a</td>\n</tr>\n</table>\n"},
+		{"caption-empty-renders-none", "zjot.test L4039",
+			"| a |\n|---|\n^ \n",
+			"<table>\n<tr>\n<th>a</th>\n</tr>\n</table>\n"},
+		{"cell-keeps-trailing-tab", "zjot.test L9477",
+			"| a\t|\n",
+			"<table>\n<tr>\n<td>a\t</td>\n</tr>\n</table>\n"},
+		{"cell-backslash-then-tab-is-text", "zjot.test L9395",
+			"| a\\\t|\n",
+			"<table>\n<tr>\n<td>a\\\t</td>\n</tr>\n</table>\n"},
+		{"cell-keeps-tab-after-escaped-space", "zjot.test L9488",
+			"| a\\ \t|\n",
+			"<table>\n<tr>\n<td>a&nbsp;\t</td>\n</tr>\n</table>\n"},
 	}
 	for _, c := range html {
 		t.Run(c.name, func(t *testing.T) {
@@ -193,6 +208,17 @@ func TestStackUnits(t *testing.T) {
       cell head=false align="default"
         str text="2"
 `, false},
+		// djot.js gives every table a caption, empty and unpositioned until
+		// one follows it.
+		{"table-without-caption-has-an-empty-one", "zjot.test L5158",
+			"|a|\n",
+			`doc
+  table (1:1:0-2:0:3)
+    caption
+    row (1:1:0-2:0:3) head=false
+      cell (1:1:0-1:3:2) head=false align="default"
+        str (1:2:1-1:2:1) text="a"
+`, true},
 	}
 	for _, c := range ast {
 		t.Run(c.name, func(t *testing.T) {
@@ -335,6 +361,15 @@ func TestBlockEnds(t *testing.T) {
         str (3:3:14-3:3:14) text="1"
   para (8:1:36-9:0:40)
     str (8:1:36-8:4:39) text="para"
+`},
+		{"row-ends-one-past-its-pipe-before-a-trailing-tab", "zjot.test L9013",
+			"| a |\t\n|---|\n",
+			`doc
+  table (1:1:0-3:0:12)
+    caption
+    row (1:1:0-1:6:5) head=true
+      cell (1:1:0-1:5:4) head=true align="default"
+        str (1:3:2-1:3:2) text="a"
 `},
 		{"definition-list-closed-by-div-fence-ends-past-it", "zjot.test L4274",
 			":::\n: t\n\n  d\n:::\n",

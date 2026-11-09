@@ -105,10 +105,30 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	}
 }
 
+// A table cell's text has no line end after it, so its trailing tab stays
+// and a backslash ending it is text; a paragraph's are trimmed (zjot.test
+// L9477, L9395).
+func TestLeafInlinesEndsLine(t *testing.T) {
+	for _, tt := range []struct {
+		src      string
+		endsLine bool
+		want     string
+	}{
+		{"a\t", true, "a"},
+		{"a\t", false, "a\t"},
+		{"a\\\t", false, "a\\\t"},
+	} {
+		nodes, _ := parseLeafInlines(tt.src, 0, tt.endsLine)
+		if got := stringContent(nodes, false); got != tt.want {
+			t.Errorf("parseLeafInlines(%q, endsLine=%v) text = %q, want %q", tt.src, tt.endsLine, got, tt.want)
+		}
+	}
+}
+
 func TestStringContent(t *testing.T) {
 	// The inline tree before resolution, which replaces a footnote
 	// reference's label with its number.
-	nodes, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0)
+	nodes, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true)
 	for _, tt := range []struct {
 		labels bool
 		want   string

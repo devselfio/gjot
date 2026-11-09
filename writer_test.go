@@ -150,3 +150,34 @@ func TestWriterOrderedMarkers(t *testing.T) {
 		}
 	}
 }
+
+// A caption is written right under its rows, so a table ending a tight list
+// item keeps the list tight (grid.test L1166); an empty caption is not
+// written at all (zjot.test L4039).
+func TestWriterTableCaption(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"caption-in-tight-item",
+			"- | a | b |\n  |---|--:|\n  | 1 | 2 |\n  ^ cap\n",
+			"- | a | b |\n  |---|--:|\n  | 1 | 2 |\n  ^ cap\n"},
+		{"empty-caption",
+			"| a |\n|---|\n^ \n",
+			"| a |\n|---|\n"},
+		{"caption-with-block-attributes",
+			"| a |\n{.x}\n^ cap\n",
+			"| a |\n{.x}\n^ cap\n"},
+		{"empty-caption-with-an-id",
+			"| a |\n{#x}\n^ \n",
+			"| a |\n{#x}\n^ \n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			djot, _ := roundTrip(t, c.src)
+			if djot != c.want {
+				t.Errorf("written\n%s\nwant\n%s", djot, c.want)
+			}
+			want := string(ASTText(Parse([]byte(c.src))))
+			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+		})
+	}
+}

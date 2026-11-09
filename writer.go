@@ -313,9 +313,17 @@ func (d *djotWriter) table(n *Node) []string {
 	if len(lines) == 0 {
 		lines = append(lines, "|---|")
 	}
+	// A caption right under the rows re-parses as the table's, and keeps a
+	// list the table ends tight; its block attributes stand before it, as
+	// any block's do. One with neither content nor attributes is not written.
 	if caption != nil {
-		lines = append(lines, "")
-		lines = append(lines, indented(strings.Split(d.inlines(caption.Children), "\n"), "^ ", "", "")...)
+		a := attrSet(caption)
+		if a != "" {
+			lines = append(lines, a)
+		}
+		if a != "" || len(caption.Children) > 0 {
+			lines = append(lines, indented(strings.Split(d.inlines(caption.Children), "\n"), "^ ", "", "")...)
+		}
 	}
 	return lines
 }
