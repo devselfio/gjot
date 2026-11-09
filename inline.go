@@ -1,6 +1,9 @@
 package gjot
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Inline parsing with an opener stack. Text nodes sliced from the inline
 // source carry their offset in Node.off so adjacent slices merge, heading
@@ -22,6 +25,14 @@ type openerInfo struct {
 	// a braced opener, else the delimiter itself.
 	srcPos int
 	marked bool
+}
+
+// touches reports whether a closer at pos would make an empty pair: the
+// delimiters are adjacent in the source, whatever stood between them made
+// no node (djot.js's opener.endpos === pos - 1; {_{}_} is an empty
+// emphasis, {__} none). Such a closer closes nothing.
+func (op openerInfo) touches(pos int) bool {
+	return op.srcPos+openerLen(op) == pos
 }
 
 type inlineItem struct {
@@ -77,11 +88,6 @@ func strNode(text string, off int) *Node {
 	return &Node{Tag: Str, Text: text, off: off + 1}
 }
 
-// lit is a text node that is not a slice of the inline source.
-func lit(text string) *Node {
-	return &Node{Tag: Str, Text: text}
-}
-
 // quoteLit is the text node a smart quote that pairs with nothing leaves:
 // the glyph it renders as, and the quote it was written as, which is what a
 // heading id or reference label reads (djot.js smart_punctuation text).
@@ -125,16 +131,36 @@ func (p *inlineParser) pushOpener(op openerInfo) {
 }
 
 // addText appends the source slice text at off, extending the previous node
-// when both are adjacent slices of the source.
+// when both are adjacent slices of the source. An open bracket is left
+// alone: its opener points at it, and the link's text is the items after it.
 func (p *inlineParser) addText(text string, off int) {
-	if n := len(p.items); n > 0 && p.items[n-1].kind == itemNode {
-		last := p.items[n-1].node
-		if last.Tag == Str && last.off > 0 && last.off-1+len(last.Text) == off {
-			last.Text = p.src[last.off-1 : off+len(text)]
-			return
-		}
+	n := len(p.items)
+	openBracket := len(p.openers) > 0 && p.openers[len(p.openers)-1].itemIdx == n-1
+	if n > 0 && !openBracket && p.items[n-1].kind == itemNode && p.joinText(p.items[n-1].node, strNode(text, off)) {
+		return
 	}
 	p.pushNode(strNode(text, off))
+}
+
+// joinText extends the text node last by n when both are adjacent slices of
+// the source: djot.js reports such text as one str. A node that is not a
+// slice (a smart quote's glyph) joins nothing.
+func (p *inlineParser) joinText(last, n *Node) bool {
+	if last.Tag != Str || n.Tag != Str || last.off == 0 || n.off == 0 || last.off-1+len(last.Text) != n.off-1 {
+		return false
+	}
+	last.Text = p.src[last.off-1 : n.off-1+len(n.Text)]
+	return true
+}
+
+// appendText appends the text node n to nodes, joining it to the last node
+// when it can: an opener that did not close leaves text djot.js reports as
+// one str with its neighbours.
+func (p *inlineParser) appendText(nodes []*Node, n *Node) []*Node {
+	if len(nodes) > 0 && p.joinText(nodes[len(nodes)-1], n) {
+		return nodes
+	}
+	return append(nodes, n)
 }
 
 func (p *inlineParser) flushText() {
@@ -171,20 +197,21 @@ func (p *inlineParser) parse() []*Node {
 			p.pushNode(at(&Node{Tag: SoftBreak}, p.pos, p.pos+1))
 			p.pos++
 			p.textStart = p.pos
-		case '*', '_':
+		// One rule for the four matched delimiters (djot.js's betweenMatched).
+		case '*', '_', '~', '^':
 			p.flushText()
 			p.handleEmphDelimiter(c, false)
 			p.textStart = p.pos
 		case '{':
 			if p.pos+1 < len(src) {
 				switch next := src[p.pos+1]; next {
-				case '_', '*':
+				case '_', '*', '~', '^':
 					p.flushText()
 					p.pos++
 					p.handleEmphDelimiter(next, true)
 					p.textStart = p.pos
 					continue
-				case '+', '-', '=', '~', '^':
+				case '+', '-', '=':
 					p.flushText()
 					p.pushOpener(openerInfo{char: next, itemIdx: len(p.items), srcPos: p.pos, marked: true})
 					p.pos += 2
@@ -205,7 +232,7 @@ func (p *inlineParser) parse() []*Node {
 				}
 				p.pos = end
 			} else {
-				p.pushNode(at(lit("{"), p.pos, p.pos+1))
+				p.addText(src[p.pos:p.pos+1], p.pos)
 				p.pos++
 			}
 			p.textStart = p.pos
@@ -219,15 +246,16 @@ func (p *inlineParser) parse() []*Node {
 					continue
 				}
 			}
+			// The bracket is an item of its own: the opener's index points at it.
 			p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
-			p.pushNode(at(lit("["), p.pos, p.pos+1))
+			p.pushNode(strNode(src[p.pos:p.pos+1], p.pos))
 			p.pos++
 			p.textStart = p.pos
 		case '!':
 			if p.pos+1 < len(src) && src[p.pos+1] == '[' {
 				p.flushText()
 				p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
-				p.pushNode(at(lit("!["), p.pos, p.pos+2))
+				p.pushNode(strNode(src[p.pos:p.pos+2], p.pos))
 				p.pos += 2
 				p.textStart = p.pos
 			} else {
@@ -240,22 +268,9 @@ func (p *inlineParser) parse() []*Node {
 		case '<':
 			p.flushText()
 			if !p.handleAutolink() {
-				p.pushNode(at(lit("<"), p.pos, p.pos+1))
+				p.addText(src[p.pos:p.pos+1], p.pos)
 				p.pos++
 			}
-			p.textStart = p.pos
-		case '^', '~':
-			p.flushText()
-			if p.pos+1 < len(src) && src[p.pos+1] == '}' && p.handleBracedClose(c) {
-				p.pos += 2
-				p.textStart = p.pos
-				continue
-			}
-			tag := Superscript
-			if c == '~' {
-				tag = Subscript
-			}
-			p.handleSuperSubscript(c, tag)
 			p.textStart = p.pos
 		case '$':
 			p.flushText()
@@ -326,7 +341,7 @@ func (p *inlineParser) handleBackslash() {
 		if p.endsLine {
 			p.hardBreak(pos, pos+1)
 		} else {
-			p.pushNode(at(lit("\\"), pos, pos+1))
+			p.addText(src[pos:pos+1], pos)
 		}
 		p.pos++
 		return
@@ -351,14 +366,16 @@ func (p *inlineParser) handleBackslash() {
 			p.pushNode(at(&Node{Tag: NonBreakingSpace}, pos+1, pos+2))
 			p.pos += 2
 		} else {
-			p.pushNode(at(lit("\\"), pos, pos+1))
+			p.addText(src[pos:pos+1], pos)
 			p.pos++
 		}
 	case isEscapable(next):
+		// The escaped byte alone: a text node of its own, which the text
+		// after it joins and the text before it does not.
 		p.pushNode(strNode(src[pos+1:pos+2], pos+1))
 		p.pos += 2
 	default:
-		p.pushNode(at(lit("\\"), pos, pos+1))
+		p.addText(src[pos:pos+1], pos)
 		p.pos++
 	}
 }
@@ -472,52 +489,63 @@ func bracedTag(char byte) Tag {
 	return Span
 }
 
-func (p *inlineParser) handleBracedClose(char byte) bool {
+// topOpener is the index of the nearest opener of char, marked or not, or
+// -1.
+func (p *inlineParser) topOpener(char byte, marked bool) int {
 	for i := len(p.openers) - 1; i >= 0; i-- {
-		op := p.openers[i]
-		if op.char == char && op.marked && op.itemIdx+1 < len(p.items) {
-			p.closeAt(i, bracedTag(char), p.pos+2)
-			return true
+		if op := p.openers[i]; op.char == char && op.marked == marked {
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
-func emphTag(char byte) Tag {
-	if char == '*' {
-		return Strong
+// closeMarked closes the marked opener {X with the X} at p.pos as a node of
+// tag spanning both braces; false when no opener is there to close or its
+// pair would be empty.
+func (p *inlineParser) closeMarked(char byte, tag Tag) bool {
+	i := p.topOpener(char, true)
+	if i < 0 || p.openers[i].touches(p.pos) {
+		return false
 	}
-	return Emph
+	p.closeAt(i, tag, p.pos+2)
+	return true
+}
+
+func (p *inlineParser) handleBracedClose(char byte) bool {
+	return p.closeMarked(char, bracedTag(char))
+}
+
+// matchedTag is the node a matched delimiter makes: djot.js's betweenMatched
+// annotations.
+func matchedTag(char byte) Tag {
+	switch char {
+	case '*':
+		return Strong
+	case '_':
+		return Emph
+	case '~':
+		return Subscript
+	}
+	return Superscript
 }
 
 func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 	src, pos := p.src, p.pos
 
 	if !marked && pos+1 < len(src) && src[pos+1] == '}' {
-		for i := len(p.openers) - 1; i >= 0; i-- {
-			op := p.openers[i]
-			if op.char == char && op.marked && op.itemIdx+1 < len(p.items) {
-				p.closeAt(i, emphTag(char), pos+2)
-				p.pos = pos + 2
-				return
-			}
+		if !p.closeMarked(char, matchedTag(char)) {
+			p.addText(src[pos:pos+2], pos)
 		}
-		p.addText(src[pos:pos+2], pos)
 		p.pos = pos + 2
 		return
 	}
 
 	if canCloseDelim(src, pos) && !marked {
-		for i := len(p.openers) - 1; i >= 0; i-- {
-			op := p.openers[i]
-			if op.char == char && op.marked == marked {
-				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, emphTag(char), pos+1)
-					p.pos = pos + 1
-					return
-				}
-				break
-			}
+		if i := p.topOpener(char, false); i >= 0 && !p.openers[i].touches(pos) {
+			p.closeAt(i, matchedTag(char), pos+1)
+			p.pos = pos + 1
+			return
 		}
 	}
 
@@ -585,75 +613,65 @@ func (p *inlineParser) handleCloseBracket() {
 		}
 
 		// Not a link after all: put the bracketed text back as text.
-		p.pushNode(at(lit(bracket), op.srcPos, op.srcPos+len(bracket)))
+		p.pushNode(strNode(bracket, op.srcPos))
 		for _, c := range children {
 			p.pushNode(c)
 		}
-		p.pushNode(at(lit("]"), pos, pos+1))
+		p.pushNode(strNode(src[pos:pos+1], pos))
 		p.openers = p.openers[:i]
-		return
-	}
-	p.pushNode(at(lit("]"), pos, pos+1))
-	p.pos = pos + 1
-}
-
-func (p *inlineParser) handleAutolink() bool {
-	src, pos := p.src, p.pos
-	rest := src[pos+1:]
-	close := strings.IndexByte(rest, '>')
-	if close < 0 {
-		return false
-	}
-	content := rest[:close]
-	switch {
-	case hasScheme(content):
-		p.pushNode(at(&Node{Tag: URL, Text: content}, pos, pos+close+2))
-	case strings.Contains(content, "@") && !strings.Contains(content, " "):
-		p.pushNode(at(&Node{Tag: Email, Text: content}, pos, pos+close+2))
-	default:
-		return false
-	}
-	p.pos = pos + 1 + close + 1
-	return true
-}
-
-// hasScheme reports whether s starts with a URL scheme ("scheme:").
-func hasScheme(s string) bool {
-	if s == "" || !isLetter(s[0]) {
-		return false
-	}
-	for i := 1; i < len(s); i++ {
-		c := s[i]
-		if c == ':' {
-			return true
-		}
-		if !isAlphanumeric(c) && c != '+' && c != '.' && c != '-' {
-			return false
-		}
-	}
-	return false
-}
-
-func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
-
-func (p *inlineParser) handleSuperSubscript(char byte, tag Tag) {
-	src, pos := p.src, p.pos
-	for i := len(p.openers) - 1; i >= 0; i-- {
-		op := p.openers[i]
-		if op.char == char && op.itemIdx+1 < len(p.items) {
-			p.closeAt(i, tag, pos+1)
-			p.pos = pos + 1
-			return
-		}
-	}
-	if canOpenDelim(src, pos) {
-		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: pos})
-		p.pos = pos + 1
 		return
 	}
 	p.addText(src[pos:pos+1], pos)
 	p.pos = pos + 1
 }
+
+func (p *inlineParser) handleAutolink() bool {
+	close, email, ok := autolinkAt(p.src, p.pos)
+	if !ok {
+		return false
+	}
+	tag := URL
+	if email {
+		tag = Email
+	}
+	p.pushNode(at(&Node{Tag: tag, Text: p.src[p.pos+1 : close]}, p.pos, close+1))
+	p.pos = close + 1
+	return true
+}
+
+// autolinkAt reads an autolink opening at pos, djot.js's <([^<>\s]+)>: the
+// index of its closing ">" and whether it is an email (an "@" follows a
+// byte other than ":"), else a URL (a letter is followed by ":"); ok is
+// false for anything else. The scan stops at the first blank or "<", so a
+// run of "<" without ">" is linear.
+func autolinkAt(src string, pos int) (close int, email, ok bool) {
+	end := pos + 1
+	for ; end < len(src) && src[end] != '>'; end++ {
+		if src[end] == '<' {
+			return 0, false, false
+		}
+		if r, _ := utf8.DecodeRuneInString(src[end:]); isJSSpace(r) {
+			return 0, false, false
+		}
+	}
+	if end >= len(src) || end == pos+1 {
+		return 0, false, false
+	}
+	content := src[pos+1 : end]
+	for i := 1; i < len(content); i++ {
+		if content[i] == '@' && content[i-1] != ':' {
+			return end, true, true
+		}
+	}
+	for i := 1; i < len(content); i++ {
+		if content[i] == ':' && isLetter(content[i-1]) {
+			return end, false, true
+		}
+	}
+	return 0, false, false
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 func (p *inlineParser) handleSymbol() bool {
 	src, pos := p.src, p.pos
@@ -687,7 +705,7 @@ func (p *inlineParser) emitDashes(start, count int) {
 	}
 	if count <= 1 {
 		if count == 1 {
-			emit(lit("-"), 1)
+			p.addText(p.src[start:start+1], start)
 		}
 		return
 	}
@@ -708,7 +726,8 @@ func (p *inlineParser) emitDashes(start, count int) {
 			emit(&Node{Tag: EnDash}, 2)
 			remaining -= 2
 		default:
-			emit(lit("-"), 1)
+			p.addText(p.src[start:start+1], start)
+			start++
 			remaining--
 		}
 	}
@@ -736,16 +755,9 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 	src, pos := p.src, p.pos
 
 	if !marked && pos+1 < len(src) && src[pos+1] == '}' {
-		for i := len(p.openers) - 1; i >= 0; i-- {
-			op := p.openers[i]
-			if op.char == char && op.marked {
-				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, quoteTag(char), pos+2)
-					p.pos = pos + 2
-					return
-				}
-				break
-			}
+		if p.closeMarked(char, quoteTag(char)) {
+			p.pos = pos + 2
+			return
 		}
 		if char == '\'' {
 			p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+2))
@@ -761,16 +773,10 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 		(char != '\'' || canOpenSingleQuote(src, pos)))
 
 	if canClose {
-		for i := len(p.openers) - 1; i >= 0; i-- {
-			op := p.openers[i]
-			if op.char == char && !op.marked {
-				if op.itemIdx+1 < len(p.items) {
-					p.closeAt(i, quoteTag(char), pos+1)
-					p.pos = pos + 1
-					return
-				}
-				break
-			}
+		if i := p.topOpener(char, false); i >= 0 && !p.openers[i].touches(pos) {
+			p.closeAt(i, quoteTag(char), pos+1)
+			p.pos = pos + 1
+			return
 		}
 	}
 
@@ -788,19 +794,32 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 // collectChildren resolves the items after openerIdx into nodes and drops
 // them, along with the opener, from the item list.
 func (p *inlineParser) collectChildren(openerIdx int) []*Node {
-	var children []*Node
-	for _, it := range p.items[openerIdx+1:] {
-		switch it.kind {
-		case itemNode:
-			children = append(children, it.node)
-		case itemOpener:
-			children = append(children, openerLit(it.opener))
-		case itemAttrs:
-			children = p.attach(children, it.attrs)
-		}
-	}
+	children := p.resolve(p.items[openerIdx+1:])
 	p.items = p.items[:openerIdx]
 	return children
+}
+
+// resolve turns items into nodes. Text joins the text before it; an opener
+// that never closed is text too, and a marked one starts a text node of its
+// own, as djot.js's open marker breaks the run of text before it (the text
+// after it joins it).
+func (p *inlineParser) resolve(items []inlineItem) []*Node {
+	var nodes []*Node
+	for _, it := range items {
+		switch it.kind {
+		case itemNode:
+			nodes = p.appendText(nodes, it.node)
+		case itemOpener:
+			if it.opener.marked {
+				nodes = append(nodes, p.openerText(it.opener))
+			} else {
+				nodes = p.appendText(nodes, p.openerText(it.opener))
+			}
+		case itemAttrs:
+			nodes = p.attach(nodes, it.attrs)
+		}
+	}
+	return nodes
 }
 
 // openerStart is where an opener whose delimiter is at pos starts: a braced
@@ -812,58 +831,35 @@ func openerStart(pos int, marked bool) int {
 	return pos
 }
 
-// openerLen is the number of source bytes an opener spans.
+// openerLen is the number of source bytes an opener item spans: a marked
+// opener its brace and delimiter, else the delimiter. (A bracket's opener
+// is not an item; its text is the node it points at.)
 func openerLen(op openerInfo) int {
-	if op.marked || op.char == '!' {
+	if op.marked {
 		return 2
 	}
 	return 1
 }
 
-// openerLit is the text node an unmatched opener leaves behind.
-func openerLit(op openerInfo) *Node {
-	text, source := openerText(op)
-	return at(quoteLit(text, source), op.srcPos, op.srcPos+openerLen(op))
-}
-
-// openerText is the text an unmatched opener stands for and, for a smart
-// quote, the quote it was written as (else "").
-func openerText(op openerInfo) (text, source string) {
-	if op.marked {
-		switch op.char {
-		case '-', '+', '=', '*', '_', '~', '^':
-			return "{" + string(rune(op.char)), ""
-		case '\'':
-			return "\u2018", "'"
-		case '"':
-			return "\u201c", "\""
-		}
-		return string(rune(op.char)), ""
-	}
+// openerText is the text node an unmatched opener leaves behind: its source
+// bytes, or for a smart quote the glyph it renders as, with the quote it was
+// written as.
+func (p *inlineParser) openerText(op openerInfo) *Node {
 	switch op.char {
-	case '!':
-		return "![", ""
-	case '"':
-		return "\u201c", "\""
 	case '\'':
-		return "\u2019", "'"
+		glyph := "\u2019"
+		if op.marked {
+			glyph = "\u2018"
+		}
+		return at(quoteLit(glyph, "'"), op.srcPos, op.srcPos+openerLen(op))
+	case '"':
+		return at(quoteLit("\u201c", "\""), op.srcPos, op.srcPos+openerLen(op))
 	}
-	return string(rune(op.char)), ""
+	return strNode(p.src[op.srcPos:op.srcPos+openerLen(op)], op.srcPos)
 }
 
 func (p *inlineParser) resolveItems() []*Node {
-	var nodes []*Node
-	for _, it := range p.items {
-		switch it.kind {
-		case itemNode:
-			nodes = append(nodes, it.node)
-		case itemOpener:
-			nodes = append(nodes, openerLit(it.opener))
-		case itemAttrs:
-			nodes = p.attach(nodes, it.attrs)
-		}
-	}
-	return nodes
+	return p.resolve(p.items)
 }
 
 func isWordSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' }

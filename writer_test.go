@@ -212,3 +212,81 @@ func TestWriterTrailingBlanksAndHardBreak(t *testing.T) {
 		})
 	}
 }
+
+// An escape starts a new text node when read back, so text is escaped only
+// where a raw byte would read as markup: at a run's start, and where the
+// byte would close an enclosing delimiter, open an attribute, a math span,
+// an autolink or a smart quote, or escape or break what follows it. Bytes
+// the parser reads as text where they stand are written raw, so a text node
+// the parser joined reads back as one node (zjot.test L3051-L3543, L10478,
+// L10658, L10669).
+func TestWriterTextEscapes(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"unclosed-emph", "_a b\n", "\\_a b\n"},
+		{"empty-pair", "__\n", "\\__\n"},
+		{"lone-star", "a * b\n", "a * b\n"},
+		{"unclosed-link", "[a](b\n", "\\[a](b\n"},
+		{"lone-brackets", "a [ b ] c ![ d\n", "a [ b ] c ![ d\n"},
+		{"lone-brace", "a { b\n", "a { b\n"},
+		{"unclosed-attribute", "a{.c b\n", "a{.c b\n"},
+		{"closing-brace-pair", "a -} b\n", "a -} b\n"},
+		{"dollars", "a $ b $$ c\n", "a $ b $$ c\n"},
+		{"angle-brackets", "<a\nb>\n", "\\<a\nb>\n"},
+		{"backslash-before-tab", "a\\\tb\n", "a\\\tb\n"},
+		{"backslash-before-space", "a \\\\ b\n", "a \\\\ b\n"},
+		{"carets", "x^2^ y^^ ^z\n", "x^2^ y^^ ^z\n"},
+		{"unclosed-marked-openers", "a {_e\n\na {+e\n\n`a` {=html}\n", "a \\{_e\n\na \\{+e\n\n`a` \\{=html}\n"},
+		{"empty-emph", "x _{}_ y\n", "x _{}_ y\n"},
+		{"empty-emph-touching-text", "x_{}_y\n", "x_{}_y\n"},
+		{"empty-mark", "a {={}=} b\n", "a {={}=} b\n"},
+		// Text nodes the parser keeps apart stay apart (zjot.test L3456).
+		{"escape-splits-text", "a \\* b\n", "a \\* b\n"},
+		{"empty-attribute-splits-text", "a {}b\n", "a {}b\n"},
+		{"comment-splits-text", "a {% c %} b\n", "a {} b\n"},
+		{"marked-text-inside-mark", "{=={}==}\n", "{=={}==}\n"},
+		{"quote-glyph-then-text", "\"a\n", "\u201c{}a\n"},
+		{"apostrophe-then-text", "don't\n", "don't\n"},
+		{"brace-closer-inside-plain-emph", "_a -} b_\n", "_a -} b_\n"},
+		{"own-closer-inside-plain-emph", "_a _} b_\n", "_a _} b_\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			djot, _ := roundTrip(t, c.src)
+			if djot != c.want {
+				t.Errorf("written %q, want %q", djot, c.want)
+			}
+			want := string(ASTText(Parse([]byte(c.src))))
+			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+		})
+	}
+}
+
+// Text the parser never produces, with bytes that would read as markup
+// where they stand, is still written so that it reads back as that text.
+func TestWriterEscapesMarkupInText(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		para []*Node
+	}{
+		{"markup-in-text", []*Node{{Tag: Str, Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
+		{"own-closer-inside-insert", []*Node{{Tag: Insert, Children: []*Node{{Tag: Str, Text: "a +} b"}}}}},
+		{"own-closer-inside-braced-emph", []*Node{{Tag: Emph, Children: []*Node{{Tag: Str, Text: " a _} b"}}}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc := &Node{Tag: Section, Children: []*Node{{Tag: Para, Children: c.para}}}
+			djot := Djot(doc)
+			got, err := HTML(Parse(djot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := HTML(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("written %q\n---want---\n%s---got---\n%s", djot, want, got)
+			}
+		})
+	}
+}

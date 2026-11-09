@@ -14,8 +14,8 @@ func TestInlinePositions(t *testing.T) {
 		{"a -- b\n", "en_dash (1:3:2-1:4:3)\n"},
 		{"a --- b\n", "em_dash (1:3:2-1:5:4)\n"},
 		{"a... b\n", "ellipsis (1:2:1-1:4:3)\n"},
-		{"*a\n", "str (1:1:0-1:1:0) text=\"*\"\n"},
-		{"a] b\n", "str (1:2:1-1:2:1) text=\"]\"\n"},
+		{"*a\n", "str (1:1:0-1:2:1) text=\"*a\"\n"},
+		{"a] b\n", "str (1:1:0-1:4:3) text=\"a] b\"\n"},
 		{"word{.c} x\n", "span (1:1:0-1:4:3) class=\"c\"\n"},
 		{"word{.c} x\n", "str (1:1:0-1:4:3) text=\"word\"\n"},
 		// Attributes on literal text keep the literal's extent, on the
@@ -207,6 +207,70 @@ func TestNormalizeLabel(t *testing.T) {
 	} {
 		if got := normalizeLabel(tt.in); got != tt.want {
 			t.Errorf("normalizeLabel(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// Markup that matches nothing is text in one node with the text around it,
+// as djot.js reports it (zjot.test L3051-L3543, L10478, L10658, L10669): an
+// unmatched delimiter, bracket, brace, dollar or angle bracket joins its
+// neighbours, a bracket that opens a link does not take the link's text, an
+// unclosed marked opener starts a node of its own, a pair with only an empty
+// attribute inside is an empty container, and a delimiter whose pair would
+// be empty closes nothing.
+func TestInlineUnmatchedMarkupIsText(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{"a [ b\n", "str (1:1:0-1:5:4) text=\"a [ b\"\n"},
+		{"a ![ b\n", "str (1:1:0-1:6:5) text=\"a ![ b\"\n"},
+		{"[a](b\n", "str (1:1:0-1:5:4) text=\"[a](b\"\n"},
+		{"a [t](u) b\n", "str (1:4:3-1:4:3) text=\"t\"\n"},
+		{"a { b\n", "str (1:1:0-1:5:4) text=\"a { b\"\n"},
+		{"a -} b\n", "str (1:1:0-1:6:5) text=\"a -} b\"\n"},
+		{"a $ b $$ c\n", "str (1:1:0-1:10:9) text=\"a $ b $$ c\"\n"},
+		{"<a\nb>\n", "str (1:1:0-1:2:1) text=\"<a\"\n"},
+		{"a\\\tb\n", "str (1:1:0-1:4:3) text=\"a\\\\\\tb\"\n"},
+		{"__\n", "str (1:1:0-1:2:1) text=\"__\"\n"},
+		{"_a b\n", "str (1:1:0-1:4:3) text=\"_a b\"\n"},
+		{"y^^ ^z\n", "str (1:1:0-1:6:5) text=\"y^^ ^z\"\n"},
+		{"x _{}_ y\n", "emph (1:3:2-1:6:5)\n    str (1:7:6-1:8:7) text=\" y\"\n"},
+		{"a {_e\n", "str (1:1:0-1:2:1) text=\"a \"\n    str (1:3:2-1:5:4) text=\"{_e\"\n"},
+		{"`a` {=html}\n", "str (1:4:3-1:4:3) text=\" \"\n    str (1:5:4-1:11:10) text=\"{=html}\"\n"},
+		// Inside a container the same joining happens.
+		{"_a [ b_\n", "emph (1:1:0-1:7:6)\n      str (1:2:1-1:6:5) text=\"a [ b\"\n"},
+		// An unmatched smart quote is not source text and stays its own node.
+		{"a\"\n", "str (1:1:0-1:1:0) text=\"a\"\n    str (1:2:1-1:2:1) text=\"\u201c\"\n"},
+	}
+	for _, tt := range tests {
+		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+// An autolink is djot.js's <([^<>\s]+)>: nothing blank or a second < inside,
+// an email when an @ follows a byte other than a colon, else a URL when a
+// letter is followed by a colon.
+func TestAutolinkAt(t *testing.T) {
+	for _, tt := range []struct {
+		src   string
+		ok    bool
+		email bool
+	}{
+		{"<http://a>", true, false},
+		{"<a@b>", true, true},
+		{"<mailto:a@b>", true, true},
+		{"<a\nb>", false, false},
+		{"<a b:c>", false, false},
+		{"<a<b:c>", false, false},
+		{"<>", false, false},
+		{"<a:>", true, false},
+		{"<1:a>", false, false},
+		{"<a", false, false},
+	} {
+		_, email, ok := autolinkAt(tt.src, 0)
+		if ok != tt.ok || email != tt.email {
+			t.Errorf("%q: got ok=%v email=%v, want ok=%v email=%v", tt.src, ok, email, tt.ok, tt.email)
 		}
 	}
 }
