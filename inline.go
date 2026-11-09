@@ -29,6 +29,9 @@ type openerInfo struct {
 	// explicit_link or reference_link, closed by the ")" or "]" the
 	// forward pass comes to.
 	link *linkOpen
+	// prevSame is the index in the stack of the opener of the same kind
+	// below this one, or -1 (inlineParser.tops).
+	prevSame int
 }
 
 // linkOpen is a bracket's "](" or "][": the link's text is the items before
@@ -78,9 +81,14 @@ type inlineParser struct {
 	endsLine bool
 	// dropped collects the ids of inline attributes left on no node, which
 	// were registered all the same (djot.js).
-	dropped   []string
-	items     []inlineItem
-	openers   []openerInfo
+	dropped []string
+	items   []inlineItem
+	openers []openerInfo
+	// tops is the index of the nearest open opener of each kind (openerKind),
+	// or -1, chained down through openerInfo.prevSame: djot.js keys its
+	// openers by kind, as zjot's Scanner.tops, so a closer finds its opener
+	// without a scan.
+	tops      [openerKinds]int
 	pos       int
 	textStart int
 	// destination is set at a "](" and cleared when a link closes on its
@@ -118,9 +126,58 @@ func parseInlineContent(src string) []*Node {
 // no node (or that a later id replaced) are returned rather than lost.
 // tooDeep says an opener was refused at MaxNesting (mayOpen).
 func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string, tooDeep bool) {
-	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
+	p := newInlineParser(src, attrsFrom, endsLine)
 	nodes = p.parse()
 	return nodes, p.dropped, p.tooDeep
+}
+
+// newInlineParser is a parser over src with no opener of any kind open.
+func newInlineParser(src string, attrsFrom int, endsLine bool) *inlineParser {
+	p := &inlineParser{src: src, attrsFrom: attrsFrom, endsLine: endsLine}
+	for k := range p.tops {
+		p.tops[k] = -1
+	}
+	return p
+}
+
+// openerKinds is the number of opener kinds: eleven opener chars, each
+// marked or not.
+const openerKinds = 22
+
+// openerKind is the kind of an opener of char, marked or not: its index in
+// inlineParser.tops, numbered as zjot's. Only these eleven chars open.
+func openerKind(char byte, marked bool) int {
+	var c int
+	switch char {
+	case '[':
+		c = 0
+	case '!':
+		c = 1
+	case '*':
+		c = 2
+	case '_':
+		c = 3
+	case '~':
+		c = 4
+	case '^':
+		c = 5
+	case '+':
+		c = 6
+	case '-':
+		c = 7
+	case '=':
+		c = 8
+	case '\'':
+		c = 9
+	case '"':
+		c = 10
+	default:
+		panic("gjot: no opener of " + string(rune(char)))
+	}
+	if marked {
+		return c*2 + 1
+	}
+	return c * 2
 }
 
 // strNode is a text node sliced from the inline source at off.
@@ -165,8 +222,18 @@ func (p *inlineParser) pushNode(n *Node) {
 	p.items = append(p.items, inlineItem{kind: itemNode, node: n})
 }
 
-func (p *inlineParser) pushOpener(op openerInfo) {
+// push puts op on the opener stack as the top of its kind.
+func (p *inlineParser) push(op openerInfo) {
+	k := openerKind(op.char, op.marked)
+	op.prevSame = p.tops[k]
+	p.tops[k] = len(p.openers)
 	p.openers = append(p.openers, op)
+}
+
+// pushOpener pushes op and records it as an item. Only the stack's copy
+// is chained by kind: the item's copy has no prevSame, and nothing reads it.
+func (p *inlineParser) pushOpener(op openerInfo) {
+	p.push(op)
 	p.items = append(p.items, inlineItem{kind: itemOpener, opener: op})
 }
 
@@ -230,13 +297,18 @@ func (p *inlineParser) closeAt(i int, tag Tag, end int) {
 	p.truncateOpeners(i)
 }
 
-// truncateOpeners drops the openers from n up, and the parens from where
-// the lowest of them starts.
+// truncateOpeners drops the openers from n up, each kind's top falling
+// back to the one below, and the parens from where the lowest of them
+// starts.
 func (p *inlineParser) truncateOpeners(n int) {
 	if n < len(p.openers) {
 		p.dropParens(p.openers[n].srcPos)
 	}
-	p.openers = p.openers[:n]
+	for len(p.openers) > n {
+		op := p.openers[len(p.openers)-1]
+		p.tops[openerKind(op.char, op.marked)] = op.prevSame
+		p.openers = p.openers[:len(p.openers)-1]
+	}
 }
 
 // dropParens drops the parens read at or after from.
@@ -318,7 +390,7 @@ func (p *inlineParser) parse() []*Node {
 			// The bracket is an item of its own: the opener's index points
 			// at it. Refused at MaxNesting it is a bracket with no opener.
 			if p.mayOpen() {
-				p.openers = append(p.openers, openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
+				p.push(openerInfo{char: '[', itemIdx: len(p.items), srcPos: p.pos})
 			}
 			p.pushNode(strNode(src[p.pos:p.pos+1], p.pos))
 			p.pos++
@@ -330,7 +402,7 @@ func (p *inlineParser) parse() []*Node {
 			if p.pos+1 < len(src) && src[p.pos+1] == '[' && p.footnoteRefEnd(p.pos+1) < 0 {
 				p.flushText()
 				if p.mayOpen() {
-					p.openers = append(p.openers, openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
+					p.push(openerInfo{char: '!', itemIdx: len(p.items), srcPos: p.pos})
 				}
 				p.pushNode(strNode(src[p.pos:p.pos+2], p.pos))
 				p.pos += 2
@@ -605,12 +677,7 @@ func bracedTag(char byte) Tag {
 // topOpener is the index of the nearest opener of char, marked or not, or
 // -1.
 func (p *inlineParser) topOpener(char byte, marked bool) int {
-	for i := len(p.openers) - 1; i >= 0; i-- {
-		if op := p.openers[i]; op.char == char && op.marked == marked {
-			return i
-		}
-	}
-	return -1
+	return p.tops[openerKind(char, marked)]
 }
 
 // closeMarked closes the marked opener {X with the X} at p.pos as a node of
@@ -707,14 +774,9 @@ func (p *inlineParser) footnoteRefEnd(pos int) int {
 }
 
 // nearestBracket is the index of the nearest bracket opener of either kind,
-// or -1.
+// or -1: the higher of the "[" and "![" tops.
 func (p *inlineParser) nearestBracket() int {
-	for i := len(p.openers) - 1; i >= 0; i-- {
-		if c := p.openers[i].char; c == '[' || c == '!' {
-			return i
-		}
-	}
-	return -1
+	return max(p.topOpener('[', false), p.topOpener('!', false))
 }
 
 // outsideLink reports whether a closer is kept from the opener at i: inside
