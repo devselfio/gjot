@@ -426,6 +426,11 @@ type inlineWriter struct {
 	// marked openers ({_ and its kind), which only X} closes.
 	open       map[byte]int
 	openMarked map[byte]int
+	// closer is what follows this writer's output: the enclosing pair's
+	// delimiter or the bracket's "]"; "" at a leaf's end. inBrackets is
+	// set inside link, image and span text, where a "]" is escaped.
+	closer     string
+	inBrackets bool
 	prevDash   bool // the previous node was a dash
 	// apostrophe is set once a ’ has been written as ' in this writer's
 	// output, its inner writers' included; an enclosing SingleQuoted is then
@@ -537,9 +542,10 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 	braced := braceOnly || char == '\'' && inner.apostrophe ||
 		isInlineSpace(content[0]) || isInlineSpace(content[len(content)-1]) ||
 		(w.open[char] > 0 && (nestedBraces || !isInlineSpace(w.prev()) && w.prev() != 0))
-	if braced && strings.Contains(content, string(rune(char))+"}") {
-		// Written for the plain form, where X} is text; in the braced form it
-		// would close the pair, so the content is written again for that form.
+	if braced && (strings.Contains(content, string(rune(char))+"}") || strings.Contains(content, "{"+string(rune(char)))) {
+		// Written for the plain form, where X} is text and {X opens a pair of
+		// its own; in the braced form they would close the pair or take its
+		// closer, so the content is written again for that form.
 		inner = w.content(n, char, true)
 		content = inner.b.String()
 	}
@@ -677,6 +683,20 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 // content writes n's children for a pair of char around them, in the plain
 // form or the braced one, with the enclosing delimiters remembered.
 func (w *inlineWriter) content(n *Node, char byte, braced bool) *inlineWriter {
+	inner := w.child()
+	inner.open[char]++
+	if braced {
+		inner.openMarked[char]++
+	}
+	inner.closer = string(rune(char))
+	inner.nodes(n.Children)
+	return inner
+}
+
+// child is a writer for content nested in this one's output, which knows
+// the openers that are open around it: a closer inside reaches them, as a
+// plain closer inside a bracket reaches an opener before the bracket.
+func (w *inlineWriter) child() *inlineWriter {
 	inner := newInlineWriter(w.d, w.lineStart)
 	for k, v := range w.open {
 		inner.open[k] = v
@@ -684,20 +704,16 @@ func (w *inlineWriter) content(n *Node, char byte, braced bool) *inlineWriter {
 	for k, v := range w.openMarked {
 		inner.openMarked[k] = v
 	}
-	inner.open[char]++
-	if braced {
-		inner.openMarked[char]++
-	}
-	inner.nodes(n.Children)
+	inner.inBrackets = w.inBrackets
 	return inner
 }
 
-// bracketed writes link, image and span content with the enclosing plain
-// delimiters forgotten, since brackets reset the opener stack's reach. A
-// smart-quote closer inside still reaches past them, so an apostrophe
-// written inside is reported to the enclosing writer (see delimited).
+// bracketed writes link, image and span content. An apostrophe written
+// inside is reported to the enclosing writer (see delimited).
 func (w *inlineWriter) bracketed(children []*Node) {
-	inner := newInlineWriter(w.d, w.lineStart)
+	inner := w.child()
+	inner.closer = "]"
+	inner.inBrackets = true
 	inner.nodes(children)
 	w.apostrophe = w.apostrophe || inner.apostrophe
 	w.write(inner.b.String())
@@ -750,31 +766,33 @@ func isSymbolChar(c byte) bool {
 
 // escapeText backslash-escapes the bytes of a text run that would otherwise
 // read back as markup. An escaped byte starts a new text node when read
-// back, so a byte is escaped only where it must be: at the run's start
-// (where a node starts anyway) and where its raw form would read as
-// markup, which for a delimiter means closing an opener that is open
-// (open, openMarked) or pairing within the run, for a brace opening an
-// attribute or a smart quote, for a bracket closing into a link within the
-// run, and for a backslash escaping or breaking what follows it. A byte
-// that reads as text where it stands is written raw, so a text node the
-// parser joined reads back as one node. A delimiter written raw that reads
-// as an opener is counted in open, so that the delimiters after it are
-// escaped where they would close it. Other markup is contextual: a dash is
-// escaped where it would join another into an en or em dash (an adjacent
-// dash in the text, or a dash node following), a dot where it would join
-// into an ellipsis, a colon where it would start a symbol, and at the
-// start of a line the first "-", "#", ">", "+" and the delimiter of what
-// would read as an ordered list marker. apos lists the offsets of ’ that
-// parsed from a ' and are written as ' again where that reads back as an
-// apostrophe (apostropheAfter); wrote reports whether one was. bounds lists
-// the offsets where a text node after the first starts: the byte there is
-// escaped, which starts a node when read back, or where it cannot be an
-// empty attribute goes before it, which makes no node and ends the one
-// before; a ’ written as ' reads back as a node of its own, so the boundary
-// after it needs neither.
+// back, so a byte is escaped only where it must be: where a node starts
+// anyway (the run's start, a boundary between the run's nodes) and where
+// its raw form would read as markup. The judgement is made on the bytes
+// that are written: the run with the boundaries kept (expand) and what
+// follows it (after: the next node's first bytes or the enclosing closer).
+// For a delimiter, markup means closing an opener that is open (open,
+// openMarked), shadowing the enclosing pair's closer, or pairing within the
+// run; for a brace, opening an attribute, a marked quote or a marked pair
+// that closes; for a closing bracket, closing a raw bracket into a link, or
+// standing in a link's text; for a backslash, escaping or breaking what
+// follows it; for a dollar, starting math. A byte that reads as text where
+// it stands is written raw, so a text node the parser joined reads back as
+// one node. In a link's, image's or span's text both brackets are escaped:
+// a raw one would pair with the bracket that closes the text. A raw
+// delimiter that reads as an opener is counted in open, so
+// that the delimiters after it are escaped where they would close it. A
+// dash is escaped where it would join another into an en or em dash, a dot
+// where it would join into an ellipsis, a colon where it would start a
+// symbol, and at the start of a line the first "-", "#", ">", "+" and the
+// delimiter of what would read as an ordered list marker. apos lists the
+// offsets of ’ that parsed from a ' and are written as ' again where that
+// reads back as an apostrophe (apostropheAfter); wrote reports whether one
+// was. bounds lists the offsets where a text node after the first starts.
 func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (string, bool) {
+	text, kinds, wrote := w.expand(text, apos, bounds)
+	after := w.after(next)
 	var b strings.Builder
-	wrote := false
 	markerDelim := -1
 	if w.lineStart {
 		if m, ok := parseOrderedMarker(text); ok {
@@ -785,75 +803,85 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 			}
 		}
 	}
-	nextDash := next != nil && (next.Tag == EmDash || next.Tag == EnDash)
-	nextDots := next != nil && next.Tag == Ellipsis
-	last := len(text) - 1
-	// openerAt is one past the run offset of the last raw delimiter of each
+	// openerAt is one past the offset of the last raw delimiter of each
 	// kind that reads as an opener: a closer right after it would make an
 	// empty pair, which closes nothing.
 	openerAt := map[byte]int{}
-	quote := false // the byte before was a ’ written as '
+	// markedEnd is one past the delimiter of the last raw marked opener: a
+	// "}" right after one is text, not that delimiter's closer.
+	markedEnd := -1
 	for i := 0; i < len(text); i++ {
-		bound := len(bounds) > 0 && bounds[0] == i
-		if bound {
-			bounds = bounds[1:]
-		}
-		if len(apos) > 0 && apos[0] == i {
-			apos = apos[1:]
-			prev, _ := utf8.DecodeLastRuneInString(w.b.String())
-			if i > 0 {
-				prev, _ = utf8.DecodeLastRuneInString(text[:i])
-			}
-			if apostropheAfter(prev) {
-				b.WriteByte('\'')
-				wrote = true
-				quote = true
-				i += len(apostrophe) - 1
-				continue
-			}
-		}
 		c := text[i]
-		escape := i == markerDelim || (i == 0 || bound) && strings.IndexByte(alwaysEscaped, c) >= 0
-		if bound && !escape && !quote {
-			b.WriteString("{}")
+		if kinds[i] == kindFixed {
+			b.WriteByte(c)
+			continue
 		}
-		quote = false
+		// tail is what is written after the byte: the rest of the run, then
+		// what follows the run.
+		tail := text[i+1:] + after
+		prev := w.prev()
+		if i > 0 {
+			prev = text[i-1]
+		}
+		escape := i == markerDelim || (i == 0 || kinds[i] == kindStart) && strings.IndexByte(alwaysEscaped, c) >= 0
 		switch c {
 		case '`', '"', '\'', '|':
 			// No reading of the raw byte is text.
 			escape = true
 		case '\\':
-			escape = escape || !backslashIsText(text, i)
+			escape = escape || !backslashIsText(tail)
 		case '*', '_', '~', '^':
-			if i < last && text[i+1] == '}' && w.openMarked[c] == 0 {
+			if strings.HasPrefix(tail, "}") && w.openMarked[c] == 0 && !(i+1 < len(kinds) && kinds[i+1] == kindStart) {
 				break // X} with no marked opener to close: text
 			}
-			closes := i > 0 && !isInlineSpace(text[i-1]) && w.open[c] > 0 && openerAt[c] != i
-			escape = escape || closes
-			if !escape && delimiterOpens(text, i, next) {
+			closes := !isInlineSpace(prev) && prev != 0 && w.open[c] > 0 && openerAt[c] != i
+			opens := tail != "" && !isInlineSpace(tail[0])
+			// Inside a pair of the same delimiter, a raw opener would take
+			// the pair's closer: the nearest opener is the one it closes.
+			steals := opens && strings.HasPrefix(w.closer, string(rune(c)))
+			escape = escape || closes || steals
+			if !escape && opens {
 				w.open[c]++
 				openerAt[c] = i + 1
 			}
 		case '{':
-			escape = escape || braceOpensMarkup(text, i, next)
-			if !escape && i < last && strings.IndexByte(markedDelims, text[i+1]) >= 0 {
-				w.openMarked[text[i+1]]++
+			// A marked opener starts a node of its own when read back, so
+			// where a node starts it needs no escape; its delimiter is
+			// written with it, not judged as a delimiter of its own.
+			marked := tail != "" && strings.IndexByte(markedDelims, tail[0]) >= 0
+			// Inside a marked pair of the same delimiter, a raw marked opener
+			// would take the pair's closer.
+			escape = escape && !marked || braceOpensMarkup(tail, len(text)-i-1) || marked && w.openMarked[tail[0]] > 0
+			if !escape && marked && i+1 < len(text) {
+				w.openMarked[tail[0]]++
+				b.WriteByte(c)
+				b.WriteByte(tail[0])
+				i++
+				markedEnd = i + 1
+				continue
 			}
 		case '}':
-			escape = escape || i > 0 && strings.IndexByte(markedDelims, text[i-1]) >= 0 && w.openMarked[text[i-1]] > 0
+			escape = escape || i != markedEnd && strings.IndexByte(markedDelims, prev) >= 0 && w.openMarked[prev] > 0
 		case '[':
-			escape = escape || bracketCloses(text, i)
+			// In a link's text a raw bracket would pair with the link's "]";
+			// before a "^" it would start a footnote reference when a "]"
+			// follows (in the run, or in what the next node writes).
+			escape = escape || w.inBrackets ||
+				strings.HasPrefix(tail, "^") && (len(text)-i-1 == 0 || strings.Contains(tail, "]"))
+			if !escape {
+				w.open['[']++
+			}
+		case ']':
+			escape = escape || w.inBrackets || w.open['['] > 0 && bracketCloses(tail, len(text)-i-1)
 		case '<':
 			_, _, ok := autolinkAt(text, i)
 			escape = escape || ok
 		case '$':
-			escape = escape || i < last && text[i+1] == '`'
+			escape = escape || strings.HasPrefix(tail, "`") || strings.HasPrefix(tail, "$`")
 		case '-':
-			escape = escape || (w.lineStart && i == 0) || (i < last && text[i+1] == '-') ||
-				(i > 0 && text[i-1] == '-') || (i == last && nextDash)
+			escape = escape || (w.lineStart && i == 0) || strings.HasPrefix(tail, "-") || prev == '-'
 		case '.':
-			escape = escape || (i < last && text[i+1] == '.') || (i > 0 && text[i-1] == '.') ||
-				(i == last && nextDots)
+			escape = escape || strings.HasPrefix(tail, ".") || prev == '.'
 		case ':':
 			// A symbol needs a name and a closing colon.
 			j := i + 1
@@ -872,68 +900,167 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 	return b.String(), wrote
 }
 
-// backslashIsText reports whether the backslash at i reads as text: the
-// byte after it is not escapable and not a space (a non-breaking space),
-// and a tab after it is followed by more text in the run (blanks to the
-// run's end could run on to a line end, a hard break).
-func backslashIsText(text string, i int) bool {
-	if i+1 >= len(text) {
+// The kinds of byte in an expanded run.
+const (
+	kindText  byte = iota // a byte of the run, judged by escapeText
+	kindStart             // a byte of the run that starts a node: escaped
+	kindFixed             // a byte the writer added, written as it is
+)
+
+// expand is the run as it is written, before escaping: a boundary between
+// two of the run's nodes is kept by escaping the byte there (kindStart)
+// or, where it is not escapable, by an empty attribute before it, which
+// makes no node and ends the one before; a ’ that reads back as an
+// apostrophe is written as ' and needs neither. wrote reports whether one
+// was.
+func (w *inlineWriter) expand(text string, apos, bounds []int) (expanded string, kinds []byte, wrote bool) {
+	var b strings.Builder
+	quote := false // the byte before was a ’ written as '
+	for i := 0; i < len(text); i++ {
+		bound := len(bounds) > 0 && bounds[0] == i
+		if bound {
+			bounds = bounds[1:]
+		}
+		if len(apos) > 0 && apos[0] == i {
+			apos = apos[1:]
+			prev, _ := utf8.DecodeLastRuneInString(w.b.String())
+			if i > 0 {
+				prev, _ = utf8.DecodeLastRuneInString(text[:i])
+			}
+			if apostropheAfter(prev) {
+				b.WriteByte('\'')
+				kinds = append(kinds, kindFixed)
+				wrote = true
+				quote = true
+				i += len(apostrophe) - 1
+				continue
+			}
+		}
+		kind := kindText
+		switch {
+		case bound && strings.IndexByte(alwaysEscaped, text[i]) >= 0:
+			kind = kindStart
+		case bound && !quote:
+			b.WriteString("{}")
+			kinds = append(kinds, kindFixed, kindFixed)
+		}
+		quote = false
+		b.WriteByte(text[i])
+		kinds = append(kinds, kind)
+	}
+	return b.String(), kinds, wrote
+}
+
+// after is what the writer writes right after a text run followed by next:
+// the first bytes of next's written form (enough to judge the run's last
+// byte by), or with no next the enclosing closer. A pair that may be
+// written braced is given as its plain delimiter, which escapes at least
+// as much.
+func (w *inlineWriter) after(next *Node) string {
+	if next == nil {
+		return w.closer
+	}
+	switch next.Tag {
+	case Emph:
+		return "_"
+	case Strong:
+		return "*"
+	case Superscript:
+		return "^"
+	case Subscript:
+		return "~"
+	case Insert, Delete, Mark:
+		return "{"
+	case DoubleQuoted:
+		return "\""
+	case SingleQuoted:
+		return "'"
+	case Verbatim, RawInline:
+		return "`"
+	case InlineMath:
+		return "$`"
+	case DisplayMath:
+		return "$$"
+	case Link, Span, FootnoteReference:
+		return "["
+	case Image:
+		return "!"
+	case URL, Email:
+		return "<"
+	case Symb:
+		return ":"
+	case Ellipsis:
+		return "."
+	case EmDash, EnDash:
+		return "-"
+	case SoftBreak:
+		return "\n"
+	case HardBreak, NonBreakingSpace:
+		return "\\"
+	}
+	return ""
+}
+
+// backslashIsText reports whether a backslash followed by tail reads as
+// text: the byte after it is not escapable and not a space (a non-breaking
+// space), and a tab after it is followed by something other than blanks (a
+// leaf's end or a line end would make it a hard break).
+func backslashIsText(tail string) bool {
+	if tail == "" {
 		return false
 	}
-	switch next := text[i+1]; {
-	case isEscapable(next), next == ' ':
+	switch next := tail[0]; {
+	case isEscapable(next), next == ' ', next == '\n':
 		return false
 	case next == '\t':
-		j := i + 1
-		for j < len(text) && (text[j] == ' ' || text[j] == '\t') {
-			j++
-		}
-		return j < len(text)
+		j := strings.TrimLeft(tail, " \t")
+		return j != "" && j[0] != '\n'
 	}
 	return true
 }
 
-// delimiterOpens reports whether the raw delimiter at i reads as an opener:
-// a non-blank follows it, in the run or as the next node written (a soft
-// break is a newline).
-func delimiterOpens(text string, i int, next *Node) bool {
-	if i+1 < len(text) {
-		return !isInlineSpace(text[i+1])
+// braceOpensMarkup reports whether a raw brace followed by tail reads as
+// markup: an inline attribute (an empty one too), a marked smart quote's
+// opener, or a marked opener; a marked opener is text in a node of its own
+// (as the parser gives it) only when its closer is nowhere in the run,
+// whose remaining length is run. The brace before another node's first
+// byte is judged by that byte.
+func braceOpensMarkup(tail string, run int) bool {
+	if tail == "" {
+		return false
 	}
-	return next != nil && next.Tag != SoftBreak
-}
-
-// braceOpensMarkup reports whether the raw brace at i reads as markup: an
-// inline attribute (an empty one too), a marked smart quote's opener, or a
-// marked opener whose closer follows in the run. A marked opener with no
-// closer is text in a node of its own, as the parser gives it. A brace
-// ending the run before another node could pair with that node's first
-// byte, so it is escaped.
-func braceOpensMarkup(text string, i int, next *Node) bool {
-	if i+1 >= len(text) {
-		return next != nil
-	}
-	n := text[i+1]
+	n := tail[0]
 	switch {
 	case n == '\'' || n == '"':
 		return true
 	case strings.IndexByte(markedDelims, n) >= 0:
-		return strings.Contains(text[i+2:], string(n)+"}")
+		return run == 0 || strings.Contains(tail[1:run], string(n)+"}")
 	}
-	_, _, ok := parseInlineAttrs(text, i)
+	_, _, ok := parseInlineAttrs("{"+tail, 0)
 	return ok
 }
 
-// bracketCloses reports whether the raw bracket at i would close into a
-// link, image or span within the run: a "]" followed by "(", "[" or "{"
-// comes later in it.
-func bracketCloses(text string, i int) bool {
-	for j := i + 1; j+1 < len(text); j++ {
-		if text[j] == ']' && strings.IndexByte("([{", text[j+1]) >= 0 {
-			return true
-		}
+// bracketCloses reports whether a raw "]" followed by tail would close an
+// open bracket into a link, image or span: a destination, a label or an
+// attribute follows and closes within the run, whose remaining length is
+// run; one that would run into the next node is taken to close.
+func bracketCloses(tail string, run int) bool {
+	if tail == "" || strings.IndexByte("([{", tail[0]) < 0 {
+		return false
 	}
-	return false
+	if run == 0 {
+		return true
+	}
+	switch tail[0] {
+	case '(':
+		_, ok := findMatchingParen(tail, 0)
+		return ok
+	case '[':
+		_, ok := findMatchingBracket(tail, 0)
+		return ok
+	}
+	_, _, ok := parseInlineAttrs(tail, 0)
+	return ok
 }
 
 // apostrophe is the glyph an apostrophe renders as.

@@ -221,33 +221,57 @@ func TestWriterTrailingBlanksAndHardBreak(t *testing.T) {
 // the parser joined reads back as one node (zjot.test L3051-L3543, L10478,
 // L10658, L10669).
 func TestWriterTextEscapes(t *testing.T) {
-	for _, c := range []struct{ name, src, want string }{
-		{"unclosed-emph", "_a b\n", "\\_a b\n"},
-		{"empty-pair", "__\n", "\\__\n"},
-		{"lone-star", "a * b\n", "a * b\n"},
-		{"unclosed-link", "[a](b\n", "\\[a](b\n"},
-		{"lone-brackets", "a [ b ] c ![ d\n", "a [ b ] c ![ d\n"},
-		{"lone-brace", "a { b\n", "a { b\n"},
-		{"unclosed-attribute", "a{.c b\n", "a{.c b\n"},
-		{"closing-brace-pair", "a -} b\n", "a -} b\n"},
-		{"dollars", "a $ b $$ c\n", "a $ b $$ c\n"},
-		{"angle-brackets", "<a\nb>\n", "\\<a\nb>\n"},
-		{"backslash-before-tab", "a\\\tb\n", "a\\\tb\n"},
-		{"backslash-before-space", "a \\\\ b\n", "a \\\\ b\n"},
-		{"carets", "x^2^ y^^ ^z\n", "x^2^ y^^ ^z\n"},
-		{"unclosed-marked-openers", "a {_e\n\na {+e\n\n`a` {=html}\n", "a \\{_e\n\na \\{+e\n\n`a` \\{=html}\n"},
-		{"empty-emph", "x _{}_ y\n", "x _{}_ y\n"},
-		{"empty-emph-touching-text", "x_{}_y\n", "x_{}_y\n"},
-		{"empty-mark", "a {={}=} b\n", "a {={}=} b\n"},
+	for _, c := range []struct {
+		name, src, want string
+		// splits: the escape the HTML needs splits a text node the parser
+		// joined, so only the HTML round trip is checked.
+		splits bool
+	}{
+		{"unclosed-emph", "_a b\n", "\\_a b\n", false},
+		{"empty-pair", "__\n", "\\__\n", false},
+		{"lone-star", "a * b\n", "a * b\n", false},
+		{"unclosed-link", "[a](b\n", "\\[a](b\n", false},
+		{"lone-brackets", "a [ b ] c ![ d\n", "a [ b ] c ![ d\n", false},
+		{"lone-brace", "a { b\n", "a { b\n", false},
+		{"unclosed-attribute", "a{.c b\n", "a{.c b\n", false},
+		{"closing-brace-pair", "a -} b\n", "a -} b\n", false},
+		{"dollars", "a $ b $$ c\n", "a $ b $$ c\n", false},
+		{"angle-brackets", "<a\nb>\n", "\\<a\nb>\n", false},
+		{"backslash-before-tab", "a\\\tb\n", "a\\\tb\n", false},
+		{"backslash-before-space", "a \\\\ b\n", "a \\\\ b\n", false},
+		{"carets", "x^2^ y^^ ^z\n", "x^2^ y^^ ^z\n", false},
+		{"unclosed-marked-openers", "a {_e\n\na {+e\n\n`a` {=html}\n", "a {_e\n\na {+e\n\n`a` {=html}\n", false},
+		{"unclosed-marked-opener-then-pair", "a {^+^ b\n", "a {^+^ b\n", false},
+		{"empty-emph", "x _{}_ y\n", "x _{}_ y\n", false},
+		{"empty-emph-touching-text", "x_{}_y\n", "x_{}_y\n", false},
+		{"empty-mark", "a {={}=} b\n", "a {={}=} b\n", false},
 		// Text nodes the parser keeps apart stay apart (zjot.test L3456).
-		{"escape-splits-text", "a \\* b\n", "a \\* b\n"},
-		{"empty-attribute-splits-text", "a {}b\n", "a {}b\n"},
-		{"comment-splits-text", "a {% c %} b\n", "a {} b\n"},
-		{"marked-text-inside-mark", "{=={}==}\n", "{=={}==}\n"},
-		{"quote-glyph-then-text", "\"a\n", "\u201c{}a\n"},
-		{"apostrophe-then-text", "don't\n", "don't\n"},
-		{"brace-closer-inside-plain-emph", "_a -} b_\n", "_a -} b_\n"},
-		{"own-closer-inside-plain-emph", "_a _} b_\n", "_a _} b_\n"},
+		{"escape-splits-text", "a \\* b\n", "a \\* b\n", false},
+		{"empty-attribute-splits-text", "a {}b\n", "a {}b\n", false},
+		{"comment-splits-text", "a {% c %} b\n", "a {} b\n", false},
+		{"marked-text-inside-mark", "{=={}==}\n", "{=={}==}\n", false},
+		{"quote-glyph-then-text", "\"a\n", "\u201c{}a\n", false},
+		{"apostrophe-then-text", "don't\n", "don't\n", false},
+		{"brace-closer-inside-plain-emph", "_a -} b_\n", "_a -} b_\n", false},
+		{"own-closer-inside-plain-emph", "_a _} b_\n", "_a _} b_\n", false},
+		// What follows the run is judged too: the next node's first bytes,
+		// the empty attribute kept at a boundary, the enclosing closer.
+		{"dollar-before-verbatim", "x ${}`b`\n", "x \\$`b`\n", true},
+		{"dollar-before-math", "x ${}$`b`\n", "x \\$$`b`\n", true},
+		{"bracket-before-boundary-attribute", "+][ ]'\n", "\\+][ \\]{}\u2019\n", true},
+		{"brace-before-boundary-attribute", "a{\t%'\n", "a\\{\t%{}\u2019\n", true},
+		{"opener-before-pair-closer", "{_a __}\n", "_a \\__\n", true},
+		{"escaped-brace-after-delimiter", "{*{}\\}*\n", "{*\\}*\n", false},
+		{"brace-before-verbatim", "b{`c`\n", "b{`c`\n", false},
+		{"unclosed-label", "%[][\n", "%[][\n", false},
+		{"brace-after-marked-opener", "{-} x:{+}\n", "{-} x:{+}\n", false},
+		{"opener-inside-pair-steals-closer", "{_a _b_}\n", "_a \\_b_\n", true},
+		{"bracket-before-superscript", "a [{^b^}]\n", "a \\[^b^\\]\n", true},
+		{"closer-inside-bracket-reaches-out", "{~[a~]{.c}~}\n", "~[a\\~]{.c}~\n", true},
+		{"marked-opener-inside-braced-pair", "a __{_b c_\n", "a _{_\\{\\_b c_}\n", true},
+		// In a span's text both brackets are escaped.
+		{"brackets-in-span-text", "b]#{.c}\n", "[b\\]#]{.c}\n", true},
+		{"open-bracket-in-span-text", "$[.={.c}\n", "[\\$\\[.=]{.c}\n", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			djot, _ := roundTrip(t, c.src)
@@ -255,8 +279,12 @@ func TestWriterTextEscapes(t *testing.T) {
 				t.Errorf("written %q, want %q", djot, c.want)
 			}
 			want := string(ASTText(Parse([]byte(c.src))))
-			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+			if got := string(ASTText(Parse([]byte(djot)))); got != want && !c.splits {
 				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+			wantHTML, _ := HTML(Parse([]byte(c.src)))
+			if gotHTML, _ := HTML(Parse([]byte(djot))); string(gotHTML) != string(wantHTML) {
+				t.Errorf("round trip changed HTML:\n---want---\n%s---got---\n%s", wantHTML, gotHTML)
 			}
 		})
 	}
