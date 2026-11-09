@@ -1111,33 +1111,41 @@ func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 			return append(nodes[:gatherStart], span), ""
 		}
 	case Span, Link, Image, Emph, Strong, Verbatim, Mark,
-		Superscript, Subscript, Insert, Delete, DoubleQuoted, SingleQuoted:
+		Superscript, Subscript, Insert, Delete, DoubleQuoted, SingleQuoted,
+		URL, Email, InlineMath, DisplayMath, FootnoteReference, Symb:
 		replaced := ""
-		if ba.id != "" {
+		if ba.writesID() {
 			replaced = last.ID
 		}
-		applyBlockAttrs(last, ba)
+		applyLaterAttrs(last, ba)
 		return nodes, replaced
 	}
 	return nodes, ba.id
 }
 
-// applyBlockAttrs layers ba over the node's own attributes, so an attribute
-// block before an ordered list keeps the list's start and type.
+// applyBlockAttrs applies attributes to a node made for them: a block
+// attribute to the block after it, an inline attribute to the span it makes.
+// A node with attributes of its own (a div's class) keeps them after the
+// block attribute's, classes joined, as djot.js: `{.x}` before `::: y` gives
+// `class="x y"`.
 func applyBlockAttrs(n *Node, ba blockAttrs) {
+	if len(n.Attrs) > 0 && len(ba.attrs) > 0 {
+		n.Attrs = ba.merge(attrsOf(n.Attrs)).attrs
+	} else if len(ba.attrs) > 0 {
+		n.Attrs = ba.attrs
+	}
 	if ba.id != "" {
 		n.ID = ba.id
 	}
-	if ba.classes != "" {
-		n.Classes = ba.classes
-	}
-	if len(ba.attrs) > 0 {
-		if len(n.Attrs) == 0 {
-			n.Attrs = ba.attrs
-		} else {
-			n.Attrs = blockAttrs{attrs: n.Attrs}.merge(blockAttrs{attrs: ba.attrs}).attrs
-		}
-	}
+}
+
+// applyLaterAttrs applies a later inline attribute to a node that has one:
+// the first keeps its places, the later's values win and its classes join
+// after, as djot.js's attribute object (`[x]{#i .c}{.d}` gives `id="i"
+// class="c d"`; an `id=""` after `#y` leaves no id).
+func applyLaterAttrs(n *Node, ba blockAttrs) {
+	merged := blockAttrs{id: n.ID, attrs: n.Attrs}.merge(ba)
+	n.ID, n.Attrs = merged.id, merged.attrs
 }
 
 func isInlineSpace(c byte) bool {
@@ -1352,17 +1360,11 @@ func stringContent(nodes []*Node, footnoteLabels bool) string {
 }
 
 // mergeRefAttrs layers a reference definition's attributes under the link's
-// own: the link's id and keys win, classes concatenate with the definition's first.
+// own, as djot.js: the definition's that the link does not set come first,
+// then the link's own in their order; nothing joins.
 func mergeRefAttrs(n *Node, ref blockAttrs) {
 	if n.ID == "" {
 		n.ID = ref.id
-	}
-	if ref.classes != "" {
-		if n.Classes != "" {
-			n.Classes = ref.classes + " " + n.Classes
-		} else {
-			n.Classes = ref.classes
-		}
 	}
 	if len(ref.attrs) == 0 {
 		return

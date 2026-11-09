@@ -1050,7 +1050,7 @@ func (p *stackParser) close(s stand) {
 			// Waits for the next block in the container it was written in.
 			// An id a later one overrides was still read.
 			if *slot != nil {
-				if (*slot).id != "" && c.data.attrParser.writesID() {
+				if (*slot).id != "" && a.writesID() {
 					p.doc.ids.register((*slot).id)
 				}
 				merged := (*slot).merge(*a)
@@ -1086,7 +1086,11 @@ func (p *stackParser) close(s stand) {
 		if c.data.end != nil {
 			end = *c.data.end
 		}
-		n = p.spanned(&Node{Tag: Div, Children: c.children, Classes: c.data.class}, c.start, end)
+		div := &Node{Tag: Div, Children: c.children}
+		if c.data.class != "" {
+			div.Attrs = []Attr{{"class", c.data.class}}
+		}
+		n = p.spanned(div, c.start, end)
 	case kindCodeBlock:
 		text := p.leafText()
 		end := s.pos

@@ -3,60 +3,63 @@ package gjot
 import "strings"
 
 // blockAttrs is a parsed attribute set `{#id .class key="value" %comment%}`.
-// Classes are carried as a single "class" entry in attrs; the classes field
-// is the fenced-div class that merge preserves alongside them.
+// attrs holds every attribute as djot.js's attribute object holds them: a
+// key keeps its first position and takes its last value, `id=x` is the same
+// key as `#x`, a `.c` joins the classes before it and `class=c` starts them
+// over. id is the non-empty `id` among them: an empty `id=""` stays an
+// attribute and names nothing, as djot.js tests the id's truthiness.
 type blockAttrs struct {
-	id      string
-	classes string
-	attrs   []Attr
+	id    string
+	attrs []Attr
+}
+
+// attrsOf is attrs as the block attributes they are, the id read off them.
+func attrsOf(attrs []Attr) blockAttrs {
+	return blockAttrs{id: valueOf(attrs, "id"), attrs: attrs}
 }
 
 func (b blockAttrs) empty() bool {
-	return b.id == "" && b.classes == "" && len(b.attrs) == 0
+	return len(b.attrs) == 0
 }
 
-// merge layers other over b: a later id wins, classes concatenate, and a
-// later key overrides an earlier one. The merged class entry comes last.
+// merge applies other over a copy of b, as djot.js applies one attribute's
+// object to the one before it: each key set as attrObject.set sets it, a
+// class joined to the classes before it (a later block attribute, or a later
+// inline attribute on the same node; zjot.test difference 16).
 func (b blockAttrs) merge(other blockAttrs) blockAttrs {
-	result := blockAttrs{id: other.id}
-	if result.id == "" {
-		result.id = b.id
-	}
-
-	var classes []string
-	var merged []Attr
-	for _, a := range b.attrs {
-		if a.Key == "class" {
-			classes = append(classes, a.Value)
-		}
-	}
+	obj := make(attrObject, len(b.attrs), len(b.attrs)+len(other.attrs))
+	copy(obj, b.attrs)
 	for _, a := range other.attrs {
-		if a.Key == "class" {
-			classes = append(classes, a.Value)
-		}
+		obj.set(a.Key, a.Value, a.Key == "class")
 	}
-	for _, a := range b.attrs {
-		if a.Key == "class" || hasKey(other.attrs, a.Key) {
+	return attrsOf(obj)
+}
+
+// attrObject is djot.js's attribute object under construction: set keeps a
+// key's first position and gives it the last value; with join, the value
+// goes after the one there with a space (a `.class`, and a class merged from
+// a later attribute), unless there is none yet.
+type attrObject []Attr
+
+func (o *attrObject) set(key, value string, join bool) {
+	for i := range *o {
+		if (*o)[i].Key != key {
 			continue
 		}
-		merged = append(merged, a)
-	}
-	for _, a := range other.attrs {
-		if a.Key != "class" {
-			merged = append(merged, a)
+		if join && (*o)[i].Value != "" {
+			(*o)[i].Value += " " + value
+		} else {
+			(*o)[i].Value = value
 		}
+		return
 	}
-	if len(classes) > 0 {
-		merged = append(merged, Attr{"class", strings.Join(classes, " ")})
-	}
-
-	result.classes = other.classes
-	if result.classes == "" {
-		result.classes = b.classes
-	}
-	result.attrs = merged
-	return result
+	*o = append(*o, Attr{key, value})
 }
+
+// writesID reports whether an id was written, `#x` or `id=`, empty included:
+// a later one overrides an id waiting before it, which djot.js registered all
+// the same.
+func (b blockAttrs) writesID() bool { return hasKey(b.attrs, "id") }
 
 func hasKey(attrs []Attr, key string) bool {
 	for _, a := range attrs {
@@ -65,6 +68,16 @@ func hasKey(attrs []Attr, key string) bool {
 		}
 	}
 	return false
+}
+
+// valueOf is the value of the key among attrs, or "" when absent.
+func valueOf(attrs []Attr, key string) string {
+	for _, a := range attrs {
+		if a.Key == key {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 type attrStatus int
@@ -98,13 +111,10 @@ type attrParser struct {
 	state      attrState
 	begin      int // -1 when no token is open
 	lastpos    int // -1 before the first step
-	id         string
-	attrs      []Attr
+	obj        attrObject
 	valueBuf   []byte
 	currentKey string
 	haveKey    bool
-	// idWritten is set once an id token was read, empty or not.
-	idWritten bool
 }
 
 func newAttrParser(src string) *attrParser {
@@ -281,27 +291,38 @@ func stepScanningComment(c byte) attrState {
 	return attrScanningComment
 }
 
+// emitID sets the `id` key, so renderers write it where it was written; a
+// second `#id` keeps the first's place with the last value, as djot.js's
+// object does. An empty `#` names nothing (djot.js).
 func (p *attrParser) emitID(pos int) {
-	p.idWritten = true
 	if p.begin < 0 {
 		return
 	}
-	lp := p.lastpos
-	if lp < 0 {
-		lp = max(pos-1, 0)
-	}
-	if lp >= p.begin {
-		p.id = p.src[p.begin+1 : pos]
+	if p.tokenEnd(pos) > p.begin {
+		p.obj.set("id", p.src[p.begin+1:pos], false)
 	}
 	p.begin = -1
 }
 
+// emitClass joins the class to the classes before it. An empty `.` names
+// nothing (djot.js).
 func (p *attrParser) emitClass(pos int) {
 	if p.begin < 0 {
 		return
 	}
-	p.attrs = append(p.attrs, Attr{"class", p.src[p.begin+1 : pos]})
+	if p.tokenEnd(pos) > p.begin {
+		p.obj.set("class", p.src[p.begin+1:pos], true)
+	}
 	p.begin = -1
+}
+
+// tokenEnd is the last byte of the token closing at pos: the byte before it
+// that the machine stepped over, or pos-1 when none was.
+func (p *attrParser) tokenEnd(pos int) int {
+	if p.lastpos < 0 {
+		return max(pos-1, 0)
+	}
+	return p.lastpos
 }
 
 func (p *attrParser) emitBareValue(pos int) {
@@ -309,7 +330,7 @@ func (p *attrParser) emitBareValue(pos int) {
 		return
 	}
 	if p.haveKey {
-		p.attrs = append(p.attrs, Attr{p.currentKey, p.src[p.begin:pos]})
+		p.obj.set(p.currentKey, p.src[p.begin:pos], false)
 		p.haveKey = false
 	}
 	p.begin = -1
@@ -327,7 +348,7 @@ func (p *attrParser) emitQuotedValue(pos int) {
 		raw = p.src[p.begin+1 : pos]
 	}
 	if p.haveKey {
-		p.attrs = append(p.attrs, Attr{p.currentKey, processAttrEscapes(collapseBlanks(raw))})
+		p.obj.set(p.currentKey, processAttrEscapes(collapseBlanks(raw)), false)
 		p.haveKey = false
 	}
 	p.begin = -1
@@ -378,32 +399,9 @@ func processAttrEscapes(raw string) string {
 	return string(buf)
 }
 
-// finish returns the parsed set. All class entries fold into one "class"
-// attribute at the position of the first.
+// finish returns the parsed set.
 func (p *attrParser) finish() blockAttrs {
-	result := blockAttrs{id: p.id}
-	if len(p.attrs) == 0 {
-		return result
-	}
-	var classes []string
-	classAt := -1
-	var merged []Attr
-	for _, a := range p.attrs {
-		if a.Key == "class" {
-			classes = append(classes, a.Value)
-			if classAt < 0 {
-				classAt = len(merged)
-				merged = append(merged, Attr{Key: "class"})
-			}
-			continue
-		}
-		merged = append(merged, a)
-	}
-	if classAt >= 0 {
-		merged[classAt].Value = strings.Join(classes, " ")
-	}
-	result.attrs = merged
-	return result
+	return attrsOf(p.obj)
 }
 
 func isAttrName(c byte) bool {
@@ -480,10 +478,6 @@ func (p *attrParser) feedLine(line string) (attrStatus, int) {
 	}
 	return status, pos - start
 }
-
-// writesID reports whether an id was written, "#x" or empty: a later one
-// overrides an id waiting before it, which was registered all the same.
-func (p *attrParser) writesID() bool { return p.idWritten }
 
 // feedAttr is the attribute parser's status after src, which starts with
 // '{': done, failed, or still open at its last byte.

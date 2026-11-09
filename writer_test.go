@@ -371,3 +371,30 @@ func TestWriterEscapesMarkupInText(t *testing.T) {
 		})
 	}
 }
+
+// Attributes are written in their order, an empty id as `id=""`, the last
+// class of a div on its fence, and on math, symbols, autolinks and footnote
+// references; each form reads back to the same HTML (zjot.test L6951,
+// L6431, L10414, L5961, L6604).
+func TestWriterAttributeOrderAndEmptyID(t *testing.T) {
+	cases := []struct{ input, want string }{
+		{"{k=v #i .c}\n> q\n", "{k=\"v\" #i .c}\n> q\n"},
+		{"{id=\"\"}\npara [a]{id=\"\"}\n\n> {id=\"\"}\n> # h\n", "{id=\"\"}\npara [a]{id=\"\"}\n\n> {id=\"\"}\n> # h\n"},
+		{"{.x}\n::: y\nz\n:::\n", "{.x}\n::: y\nz\n:::\n"},
+		{"$`m`{#i .a k=v} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n", "$`m`{#i .a k=\"v\"} :sym:{.b} <http://x>{.c} <a@b.c>{#j}\n"},
+		{"x[^n]{.a}\n\n[^n]: n\n", "x[^1]{.a}\n\n[^1]: n\n"},
+	}
+	for _, c := range cases {
+		djot, html := roundTrip(t, c.input)
+		if djot != c.want {
+			t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, djot)
+		}
+		want, err := HTML(Parse([]byte(c.input)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if html != string(want) {
+			t.Errorf("---input---\n%s---html before---\n%s---after---\n%s", c.input, want, html)
+		}
+	}
+}

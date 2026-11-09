@@ -211,9 +211,11 @@ func (d *document) sections(blocks []*Node, end *SourcePos) []*Node {
 		sec := &Node{Tag: Section, Level: b.Level, ID: b.ID, AutoID: b.AutoID}
 		heading := *b
 		heading.ID, heading.AutoID = "", false
+		// A written non-empty id moves the heading's attributes to the
+		// section; else the heading keeps them, an `id=""` included, and
+		// the section takes the generated id alone (zjot document.zig).
 		if b.ID != "" && !b.AutoID {
-			sec.Attrs, sec.Classes = b.Attrs, b.Classes
-			heading.Attrs, heading.Classes = nil, ""
+			sec.Attrs, heading.Attrs = b.Attrs, nil
 		}
 		if b.Pos != nil {
 			sec.Pos = &Range{Start: b.Pos.Start, End: b.Pos.End}

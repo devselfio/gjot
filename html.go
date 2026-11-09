@@ -185,13 +185,8 @@ func (r *renderer) render(n *Node) {
 		r.tight = old
 		r.w("</ol>\n")
 	case TaskList:
-		r.w("<ul class=\"task-list")
-		for _, c := range n.classList() {
-			r.w(" ")
-			r.attrEsc(c)
-		}
-		r.w("\"")
-		r.attrsWithoutClass(n)
+		r.w("<ul")
+		r.classed("task-list", n)
 		r.w(">\n")
 		old := r.tight
 		r.tight = n.Tight
@@ -310,6 +305,8 @@ func (r *renderer) render(n *Node) {
 		r.children(n)
 		r.w("</span>")
 	case FootnoteReference:
+		// The tag writes its own id (fnrefN); a written id is dropped, not
+		// written twice (zjot.test difference 3).
 		r.w("<a")
 		if n.ID != "" {
 			r.w(" id=\"")
@@ -321,7 +318,13 @@ func (r *renderer) render(n *Node) {
 			r.attrEsc(*n.Destination)
 			r.w("\"")
 		}
-		r.w(" role=\"doc-noteref\"><sup>")
+		r.w(" role=\"doc-noteref\"")
+		for _, a := range n.renderedAttrs() {
+			if a.Key != "id" {
+				r.attr(a.Key, a.Value)
+			}
+		}
+		r.w("><sup>")
 		r.esc(n.Text)
 		r.w("</sup></a>")
 	case Superscript:
@@ -335,27 +338,35 @@ func (r *renderer) render(n *Node) {
 	case Mark:
 		r.wrap("mark", n)
 	case InlineMath:
-		r.w("<span class=\"math inline\">\\(")
+		r.classed("math inline", n)
+		r.w(">\\(")
 		r.esc(n.Text)
 		r.w("\\)</span>")
 	case DisplayMath:
-		r.w("<span class=\"math display\">\\[")
+		r.classed("math display", n)
+		r.w(">\\[")
 		r.esc(n.Text)
 		r.w("\\]</span>")
 	case URL:
 		r.w("<a href=\"")
 		r.attrEsc(n.Text)
-		r.w("\">")
+		r.w("\"")
+		r.attrs(n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
 	case Email:
 		r.w("<a href=\"mailto:")
 		r.attrEsc(n.Text)
-		r.w("\">")
+		r.w("\"")
+		r.attrs(n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
 	case Symb:
-		r.w("<span class=\"symbol\">")
+		// zjot's rendering (djot.js prints the `:alias:` text; difference 4).
+		r.classed("symbol", n)
+		r.w(">")
 		r.esc(n.Text)
 		r.w("</span>")
 	case DoubleQuoted:
@@ -418,43 +429,47 @@ func (r *renderer) listItems(list *Node) {
 	}
 }
 
-// attrs writes id, attrs, and classes; a "class" attr takes precedence over
-// the classes field.
+// attrs writes the node's attributes in source order, as djot.js: its id
+// where an `id` was written (an empty `id=""` included, over a generated
+// id), or first when the document gave it.
 func (r *renderer) attrs(n *Node) {
-	if n.ID != "" {
-		r.w(" id=\"")
-		r.attrEsc(n.ID)
-		r.w("\"")
-	}
-	r.attrList(n.Attrs)
-	if !hasKey(n.Attrs, "class") && n.Classes != "" {
+	r.filteredAttrs(n, false)
+}
+
+// classed opens a span (or, for a task list, a ul) whose intrinsic class
+// the node's classes join, then writes its other attributes, as djot.js.
+func (r *renderer) classed(intrinsic string, n *Node) {
+	if n.Tag == TaskList {
 		r.w(" class=\"")
-		r.attrEsc(n.Classes)
-		r.w("\"")
+	} else {
+		r.w("<span class=\"")
 	}
+	r.w(intrinsic)
+	for _, c := range n.classList() {
+		r.w(" ")
+		r.attrEsc(c)
+	}
+	r.w("\"")
+	r.filteredAttrs(n, true)
 }
 
-// attrsWithoutClass writes id and the attrs other than class, in attrs'
-// order, for a node whose classes the caller has already written.
-func (r *renderer) attrsWithoutClass(n *Node) {
-	if n.ID != "" {
-		r.w(" id=\"")
-		r.attrEsc(n.ID)
-		r.w("\"")
+func (r *renderer) filteredAttrs(n *Node, skipClass bool) {
+	attrs := n.renderedAttrs()
+	if n.ID != "" && !hasKey(attrs, "id") {
+		r.attr("id", n.ID)
 	}
-	for _, a := range n.Attrs {
-		if a.Key != "class" {
-			r.attrList([]Attr{a})
-		}
-	}
-}
-
-func (r *renderer) attrList(attrs []Attr) {
 	for _, a := range attrs {
-		r.w(" " + a.Key + "=\"")
-		r.attrEsc(a.Value)
-		r.w("\"")
+		if skipClass && a.Key == "class" {
+			continue
+		}
+		r.attr(a.Key, a.Value)
 	}
+}
+
+func (r *renderer) attr(key, value string) {
+	r.w(" " + key + "=\"")
+	r.attrEsc(value)
+	r.w("\"")
 }
 
 var htmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")

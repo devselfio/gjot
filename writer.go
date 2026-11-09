@@ -131,8 +131,8 @@ func (d *djotWriter) block(n *Node) []string {
 		inner := d.blocks(n.Children)
 		fence := strings.Repeat(":", fenceLength(inner, ':'))
 		open := fence
-		if n.Classes != "" {
-			open += " " + n.Classes
+		if class := divFenceClass(n); class != "" {
+			open += " " + class
 		}
 		lines = append(lines, open)
 		lines = append(lines, inner...)
@@ -386,30 +386,93 @@ func withoutBacklink(blocks []*Node) []*Node {
 }
 
 // attrSet writes a node's attributes as `{#id .c k="v"}`, or "" when it has
-// none. Generated ids are left out.
+// none: the attributes in their order, an id the document gave the node and
+// no attribute wrote first; a generated id is left out, as is the class a
+// div's fence carries. An id or class the short form cannot spell, an empty
+// id among them, is written as its key.
 func attrSet(n *Node) string {
+	attrs := n.renderedAttrs()
+	if n.Tag == Div {
+		attrs = withoutLastClass(attrs)
+	}
 	var parts []string
-	if n.ID != "" && !n.AutoID {
-		parts = append(parts, "#"+n.ID)
+	if n.ID != "" && !n.AutoID && !hasKey(attrs, "id") {
+		parts = append(parts, attrPart("id", n.ID))
 	}
-	if n.Classes != "" && n.Tag != Div {
-		for _, c := range strings.Fields(n.Classes) {
-			parts = append(parts, "."+c)
-		}
-	}
-	for _, a := range n.Attrs {
-		if a.Key == "class" {
-			for _, c := range strings.Fields(a.Value) {
-				parts = append(parts, "."+c)
-			}
-			continue
-		}
-		parts = append(parts, a.Key+"=\""+attrValueEscaper.Replace(a.Value)+"\"")
+	for _, a := range attrs {
+		parts = append(parts, attrPart(a.Key, a.Value))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return "{" + strings.Join(parts, " ") + "}"
+}
+
+// attrPart is one attribute in its short form (`#id`, `.a .b`) when the
+// parser reads that form back to the same value, else `key="value"`.
+func attrPart(key, value string) string {
+	switch key {
+	case "id":
+		if value != "" && allBytes(value, isIDChar) {
+			return "#" + value
+		}
+	case "class":
+		words := strings.Fields(value)
+		if len(words) > 0 && strings.Join(words, " ") == value && allWords(words, isAttrName) {
+			return "." + strings.Join(words, " .")
+		}
+	}
+	return key + "=\"" + attrValueEscaper.Replace(value) + "\""
+}
+
+func allBytes(s string, ok func(byte) bool) bool {
+	for i := 0; i < len(s); i++ {
+		if !ok(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func allWords(words []string, ok func(byte) bool) bool {
+	for _, w := range words {
+		if !allBytes(w, ok) {
+			return false
+		}
+	}
+	return true
+}
+
+// divFenceClass is the class a div's fence carries: the last of its
+// classes, when it is one the fence may name; the block attribute before
+// the fence joins the rest before it (`{.x}` then `::: y` reads back as
+// `class="x y"`).
+func divFenceClass(n *Node) string {
+	words := strings.Fields(valueOf(n.renderedAttrs(), "class"))
+	if len(words) == 0 || !divClass(words[len(words)-1]) {
+		return ""
+	}
+	return words[len(words)-1]
+}
+
+// withoutLastClass is attrs with the class divFenceClass writes on the
+// fence taken off; the class entry goes when it was the only one.
+func withoutLastClass(attrs []Attr) []Attr {
+	var out []Attr
+	for _, a := range attrs {
+		if a.Key != "class" {
+			out = append(out, a)
+			continue
+		}
+		words := strings.Fields(a.Value)
+		if len(words) > 0 && divClass(words[len(words)-1]) {
+			words = words[:len(words)-1]
+		}
+		if len(words) > 0 {
+			out = append(out, Attr{"class", strings.Join(words, " ")})
+		}
+	}
+	return out
 }
 
 var attrValueEscaper = strings.NewReplacer("\\", "\\\\", "\"", "\\\"")
@@ -621,8 +684,10 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		w.write(verbatim(n.Text) + "{=" + n.Lang + "}")
 	case InlineMath:
 		w.write("$" + ticks(n.Text))
+		w.attrs(n)
 	case DisplayMath:
 		w.write("$$" + ticks(n.Text))
+		w.attrs(n)
 	case Link, Image:
 		if n.Tag == Image {
 			w.write("![")
@@ -651,10 +716,14 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		}
 	case URL, Email:
 		w.write("<" + n.Text + ">")
+		w.attrs(n)
 	case FootnoteReference:
+		// Its ID is the renderer's fnrefN, not written; its attributes are.
 		w.write("[^" + n.Text + "]")
+		w.write(attrSet(&Node{Tag: FootnoteReference, Attrs: n.Attrs}))
 	case Symb:
 		w.write(":" + n.Text + ":")
+		w.attrs(n)
 	case Ellipsis:
 		w.write("...")
 	case EmDash, EnDash:
