@@ -107,7 +107,8 @@ make check      # gofmt (fails listing unformatted files), go vet, go mod tidy -
 ```
 
 CI runs `make check`, `make build`, `make test` and `make spec-count` on every
-push to `main` and every pull request. `make help` lists the targets.
+push to `main` and every pull request; `make spec-drift` is the step CI adds
+next. `make help` lists the targets.
 
 `TestSpec` runs the `.test` files under `testdata/spec/`: the 28 `.test` files
 of zjot v2.0.0 (the 26 djot.js suite files it vendors plus its own `grid.test`
@@ -128,9 +129,18 @@ go test -run 'TestSpec$' -v . | grep 'corpus:'
 `TestJSONRoundTrip` marshals every case's AST to JSON and back and compares the
 AST text and the HTML, with and without source positions.
 
-`go run ./cmd/driftcheck` compares that corpus with zjot's at the ref pinned in
-`ORIGIN.md` and exits non-zero naming each file that differs. It needs the
-network, so it is not part of `go test`.
+`make spec-drift` (or `go run ./cmd/driftcheck`) checks that corpus against the
+tag pinned in `ORIGIN.md`, which must be a `vN.N.N` tag, never a branch.
+Offline it compares the files with their checked-in record,
+`testdata/spec/SHA256SUMS`; when the network answers it also fetches zjot at
+the tag and compares with that. It exits 1 naming each file added, removed or
+changed, and also when `ORIGIN.md` pins a tag that `SHA256SUMS` does not
+record, so bumping the pin without re-recording the corpus is red offline and
+online. `go run ./cmd/driftcheck -record` writes `SHA256SUMS` after an online
+match with zjot at the pinned tag; `go run ./cmd/driftcheck REF` measures the
+gap to another ref without moving the pin. `go test ./cmd/driftcheck` covers all
+of it against local test servers, and its `TestRecordRealCorpus` runs the
+offline check on the real corpus.
 
 ## Architecture
 
