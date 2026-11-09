@@ -274,6 +274,10 @@ func TestWriterTextEscapes(t *testing.T) {
 		{"marked-opener-at-line-start-then-pair", "{_k=v}_a_\n", "\\{\\_k=v}_a_\n", true},
 		{"marked-opener-at-line-start-not-attribute", "{_*_a_*\n", "{_*_a_*\n", false},
 		{"marked-opener-alone-on-line", "{_b_\n", "{_b_\n", false},
+		// A marked opener escaped for any reason takes its delimiter's
+		// escape with it (pass 5: the freed delimiter paired later).
+		{"second-marked-opener-of-open-kind", "\\{_\n{_.[_a_](u)\n", "{_\n\\{\\_.[_a_](u)\n", true},
+		{"marked-opener-inside-marked-pair-then-pair", "x {_\nb {_.{=_a_=}\n", "x {_\nb \\{\\_.{=_a_=}\n", true},
 		{"raw-format-after-verbatim-is-text", "x `a`\\{=html} y\n", "x `a`\\{=html} y\n", false},
 		{"brace-then-escaped-delimiter", "{\\_\n", "\\{\\_\n", false},
 		{"bracket-before-boundary-attribute", "+][ ]'\n", "\\+][ \\]{}\u2019\n", true},

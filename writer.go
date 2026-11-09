@@ -855,30 +855,26 @@ func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (
 			marked := inRun != "" && strings.IndexByte(markedDelims, inRun[0]) >= 0 && kinds[i+1] != kindStart &&
 				!(i == 0 && w.prev() == '`' && inRun[0] == '=')
 			if marked {
-				if i == 0 && w.lineStart && w.attrsCouldClose(tail, next) {
-					// At a line's start the line could read as a block
-					// attribute ("_" and "-" are key bytes): both bytes are
-					// escaped, so that the delimiter does not pair with a
-					// later node's.
+				// The opener is escaped where the line could read as a block
+				// attribute ("_" and "-" are key bytes), where its closer
+				// follows in the run, and inside a marked pair of the same
+				// delimiter, whose closer it would take. Both bytes are
+				// escaped then, so that the freed delimiter does not pair
+				// with a later node's.
+				if i == 0 && w.lineStart && w.attrsCouldClose(tail, next) ||
+					braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0 {
 					b.WriteByte('\\')
 					b.WriteByte(c)
 					b.WriteByte('\\')
 					b.WriteByte(inRun[0])
-					i++
-					continue
-				}
-				// Inside a marked pair of the same delimiter, a raw marked
-				// opener would take the pair's closer.
-				escape = braceOpensMarkup(tail, len(inRun)) || w.openMarked[inRun[0]] > 0
-				if !escape {
+				} else {
 					w.openMarked[inRun[0]]++
 					b.WriteByte(c)
 					b.WriteByte(inRun[0])
-					i++
-					markedEnd = i + 1
-					continue
+					markedEnd = i + 2
 				}
-				break
+				i++
+				continue
 			}
 			escape = escape || braceOpensMarkup(tail, len(inRun)) || w.attrsCouldClose(tail, next)
 		case '}':
