@@ -181,3 +181,34 @@ func TestWriterTableCaption(t *testing.T) {
 		})
 	}
 }
+
+// Trailing blanks the parser keeps are written so they read back: a space
+// before an empty attribute or a hard break gets its `{}`, a trailing tab
+// is content as written, and a leaf ending in a hard break is written with
+// its backslash last (zjot.test L10714, L10889, L8881, L5490, L5640).
+func TestWriterTrailingBlanksAndHardBreak(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"space-before-empty-attribute", "a {}\n", "a {}\n"},
+		{"space-before-comment", "a {%x%}\n", "a {}\n"},
+		{"space-before-hard-break", "a {}\\\nb\n", "a {}\\\nb\n"},
+		{"tab-before-hard-break", "a\t{}\\\nb\n", "a\t{}\\\nb\n"},
+		{"trailing-tab", "a\t\n", "a\t\n"},
+		{"space-then-tab", "a \t\n", "a \t\n"},
+		{"paragraph-ending-in-hard-break", "a\\\n", "a\\\n"},
+		{"heading-ending-in-hard-break", "# a\\\n", "# a\\\n"},
+		{"item-ending-in-hard-break", "- a\\\n- b\n", "- a\\\n- b\n"},
+		{"caption-ending-in-hard-break", "| a |\n^ c\\\n", "| a |\n^ c\\\n"},
+		{"escaped-backslash-then-soft-break", "a\\\\\nb\n", "a\\\\\nb\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			djot, _ := roundTrip(t, c.src)
+			if djot != c.want {
+				t.Errorf("written %q, want %q", djot, c.want)
+			}
+			want := string(ASTText(Parse([]byte(c.src))))
+			if got := string(ASTText(Parse([]byte(djot)))); got != want {
+				t.Errorf("round trip changed AST:\n---want---\n%s---got---\n%s", want, got)
+			}
+		})
+	}
+}

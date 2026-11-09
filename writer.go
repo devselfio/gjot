@@ -97,18 +97,13 @@ func (d *djotWriter) block(n *Node) []string {
 	case OrderedList:
 		return append(lines, d.orderedList(n)...)
 	case Para:
-		text := d.inlines(n.Children)
-		if strings.HasSuffix(text, "\n") {
-			text += "{}" // keeps the trailing soft break from reading as a blank line
-		}
-		return append(lines, strings.Split(text, "\n")...)
+		return append(lines, d.leafLines(n.Children)...)
 	case Heading:
 		hashes := strings.Repeat("#", n.Level)
-		text := d.inlines(n.Children)
-		if text == "" {
+		if len(n.Children) == 0 {
 			return append(lines, hashes)
 		}
-		return append(lines, indented(strings.Split(text, "\n"), hashes+" ", hashes+" ", "")...)
+		return append(lines, indented(d.leafLines(n.Children), hashes+" ", hashes+" ", "")...)
 	case ThematicBreak:
 		return append(lines, "* * *")
 	case CodeBlock, RawBlock:
@@ -322,7 +317,7 @@ func (d *djotWriter) table(n *Node) []string {
 			lines = append(lines, a)
 		}
 		if a != "" || len(caption.Children) > 0 {
-			lines = append(lines, indented(strings.Split(d.inlines(caption.Children), "\n"), "^ ", "", "")...)
+			lines = append(lines, indented(d.leafLines(caption.Children), "^ ", "", "")...)
 		}
 	}
 	return lines
@@ -431,6 +426,22 @@ type inlineWriter struct {
 	// output, its inner writers' included; an enclosing SingleQuoted is then
 	// braced, so that ' cannot close it.
 	apostrophe bool
+}
+
+// leafLines is the lines of a paragraph, heading or caption, whose end the
+// parser trims: a trailing soft break or space gets an empty attribute
+// after it, so the break does not read as a blank line and the space is
+// not trimmed, and a trailing hard break is written as its backslash alone,
+// which ends the leaf.
+func (d *djotWriter) leafLines(nodes []*Node) []string {
+	text := d.inlines(nodes)
+	switch {
+	case len(nodes) > 0 && nodes[len(nodes)-1].Tag == HardBreak:
+		text = strings.TrimSuffix(text, "\n")
+	case strings.HasSuffix(text, "\n"), strings.HasSuffix(text, " "):
+		text += "{}"
+	}
+	return strings.Split(text, "\n")
 }
 
 func (d *djotWriter) inlines(nodes []*Node) string {
@@ -545,6 +556,9 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 	case SoftBreak:
 		w.write("\n")
 	case HardBreak:
+		if isInlineSpace(w.prev()) {
+			w.write("{}") // the parser trims the blanks before a hard break
+		}
 		w.write("\\\n")
 	case NonBreakingSpace:
 		w.write("\\ ")

@@ -875,7 +875,8 @@ func (p *stackParser) failedAttrsFrom() int {
 }
 
 // addLeafLine adds the rest of the line at cur as the open leaf's next
-// line. Trailing blanks stay: the inline parser trims them.
+// line. Trailing blanks stay: before a soft break they are content, and at
+// the leaf's end the inline parser trims the spaces, as djot.js.
 func (p *stackParser) addLeafLine(cur *cursor) {
 	p.addLeafSlice(cur.rest(), cur.pos(), cur.line)
 	t := p.tip()
@@ -907,6 +908,7 @@ func (p *stackParser) leafLineMap() lineMap {
 		m.segments = append(m.segments, lineSegment{joinedStart: joined, orig: p.leafStarts[i].pos, eol: p.leafStarts[i].eol})
 		joined += len(s) + 1
 	}
+	m.total = joined - 1
 	return m
 }
 

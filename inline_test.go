@@ -34,6 +34,13 @@ func TestInlinePositions(t *testing.T) {
 		// Inside a block quote, offsets and columns follow the source.
 		{"> a\n> *b*\n", "soft_break (2:0:3-2:0:3)\n"},
 		{"> a\n> *b*\n", "strong (2:3:6-2:5:8)\n"},
+		// A backslash ending the leaf is a hard break on its newline; with
+		// blanks after it, from the first blank to the newline (zjot.test
+		// L5490, L9448). An unclosed verbatim ends before its trailing
+		// spaces (L10705).
+		{"a\\\n", "hard_break (2:0:2-2:0:2)\n"},
+		{"# foo\\ \n", "hard_break (1:7:6-2:0:7)\n"},
+		{"`a  \n", "verbatim (1:1:0-1:2:1) text=\"a\"\n"},
 	}
 	for _, tt := range tests {
 		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
@@ -70,7 +77,7 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	m := lineMap{segments: []lineSegment{
 		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 5}},
 		{joinedStart: 4, orig: SourcePos{Line: 2, Col: 3, Offset: 8}, eol: SourcePos{Line: 3, Col: 0, Offset: 10}},
-	}}
+	}, total: 6}
 	tests := []struct {
 		off  int
 		want SourcePos
@@ -80,6 +87,9 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 		{3, SourcePos{Line: 2, Col: 0, Offset: 5}},
 		{4, SourcePos{Line: 2, Col: 3, Offset: 8}},
 		{5, SourcePos{Line: 2, Col: 4, Offset: 9}},
+		// One past the joined text: the last line's newline, where a hard
+		// break ending the leaf stands.
+		{6, SourcePos{Line: 3, Col: 0, Offset: 10}},
 	}
 	for _, tt := range tests {
 		if got := m.resolve(tt.off); got != tt.want {
@@ -99,30 +109,74 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	skipped := lineMap{segments: []lineSegment{
 		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 3}},
 		{joinedStart: 2, orig: SourcePos{Line: 3, Col: 3, Offset: 8}, eol: SourcePos{Line: 4, Col: 0, Offset: 9}},
-	}}
+	}, total: 3}
 	if got, want := skipped.resolve(1), (SourcePos{Line: 2, Col: 0, Offset: 3}); got != want {
 		t.Errorf("skipped line: resolve(1) = %+v, want %+v", got, want)
 	}
 }
 
-// A table cell's text has no line end after it, so its trailing tab stays
-// and a backslash ending it is text; a paragraph's are trimmed (zjot.test
-// L9477, L9395).
+// A table cell's text has no line end after it, so its trailing blanks
+// stay and a backslash ending it is text. A paragraph's trailing spaces
+// go, a trailing tab stays as content, and a backslash ending it is a hard
+// break (zjot.test L9477, L9395, L8881, L5490). The spaces go only from
+// text that ends at the leaf's end or at the hard break: before an empty
+// attribute or a comment they stay (L10714, L10889).
 func TestLeafInlinesEndsLine(t *testing.T) {
 	for _, tt := range []struct {
 		src      string
 		endsLine bool
 		want     string
 	}{
-		{"a\t", true, "a"},
+		{"a\t", true, "a\t"},
 		{"a\t", false, "a\t"},
+		{"a \t", true, "a \t"},
+		{"a\t ", true, "a\t"},
+		{"a  ", true, "a"},
+		{"a  ", false, "a  "},
 		{"a\\\t", false, "a\\\t"},
+		{"a\\", false, "a\\"},
+		{"a\\", true, "a" + hardBreak},
+		{"a \t\\", true, "a" + hardBreak},
+		{"a\\ \t", true, "a" + hardBreak},
+		{"a\\ \t", false, "a" + nbsp + "\t"},
+		{"a {}", true, "a "},
+		{"a {%x%}", true, "a "},
+		{"a {}\\\nb", true, "a " + hardBreak + "b"},
+		{"a\t{}\\\nb", true, "a\t" + hardBreak + "b"},
+		{"`a  ", true, "`a`"},
+		{"`a  ", false, "`a  `"},
+		{"x ` ", true, "x ``"},
 	} {
 		nodes, _ := parseLeafInlines(tt.src, 0, tt.endsLine)
-		if got := stringContent(nodes, false); got != tt.want {
-			t.Errorf("parseLeafInlines(%q, endsLine=%v) text = %q, want %q", tt.src, tt.endsLine, got, tt.want)
+		if got := inlineText(nodes); got != tt.want {
+			t.Errorf("parseLeafInlines(%q, endsLine=%v) = %q, want %q", tt.src, tt.endsLine, got, tt.want)
 		}
 	}
+}
+
+const (
+	hardBreak = "<br>"
+	nbsp      = "\u00a0"
+)
+
+// inlineText spells inline nodes out for comparison: text as is, a hard
+// break as hardBreak, a non-breaking space as nbsp, a verbatim in
+// backticks.
+func inlineText(nodes []*Node) string {
+	var b strings.Builder
+	for _, n := range nodes {
+		switch n.Tag {
+		case HardBreak:
+			b.WriteString(hardBreak)
+		case NonBreakingSpace:
+			b.WriteString(nbsp)
+		case Verbatim:
+			b.WriteString("`" + n.Text + "`")
+		default:
+			b.WriteString(n.Text)
+		}
+	}
+	return b.String()
 }
 
 func TestStringContent(t *testing.T) {

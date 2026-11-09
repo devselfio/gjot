@@ -37,8 +37,9 @@ type inlineParser struct {
 	// failed block attribute took, which djot.js reparses without them).
 	attrsFrom int
 	// endsLine: whether a line end follows src (a table cell's does not).
-	// Where one does, the trailing spaces and tabs of the last text go, as
-	// djot.js trims them before the newline.
+	// Where one does, a backslash ending src is a hard break, and the last
+	// text's or an unclosed verbatim's trailing spaces go, as djot.js trims
+	// them before the newline; a trailing tab is content.
 	endsLine bool
 	// dropped collects the ids of inline attributes left on no node, which
 	// were registered all the same (djot.js).
@@ -312,7 +313,7 @@ func (p *inlineParser) parse() []*Node {
 	}
 	p.flushText()
 	if p.endsLine {
-		p.trimTrailingWhitespace()
+		p.trimLastText(len(src), " ")
 	}
 	return p.resolveItems()
 }
@@ -320,25 +321,32 @@ func (p *inlineParser) parse() []*Node {
 func (p *inlineParser) handleBackslash() {
 	src, pos := p.src, p.pos
 	if pos+1 >= len(src) {
-		p.pushNode(at(lit("\\"), pos, pos+1))
+		// A backslash ending the block is a hard break on its newline, as
+		// djot.js; ending a cell, which has none, it is text.
+		if p.endsLine {
+			p.hardBreak(pos, pos+1)
+		} else {
+			p.pushNode(at(lit("\\"), pos, pos+1))
+		}
 		p.pos++
 		return
 	}
 	next := src[pos+1]
 	switch {
 	case next == '\n':
-		p.stripTrailingSpacesFromLastStr()
-		p.pushNode(at(&Node{Tag: HardBreak}, pos+1, pos+2))
+		p.hardBreak(pos, pos+1)
 		p.pos += 2
 	case next == ' ' || next == '\t':
 		skip := pos + 1
 		for skip < len(src) && (src[skip] == ' ' || src[skip] == '\t') {
 			skip++
 		}
-		if skip < len(src) && src[skip] == '\n' {
-			p.stripTrailingSpacesFromLastStr()
-			p.pushNode(at(&Node{Tag: HardBreak}, pos+1, skip+1))
-			p.pos = skip + 1
+		if skip < len(src) && src[skip] == '\n' || skip == len(src) && p.endsLine {
+			// A hard break, at the end of src too when a line end follows
+			// it; as djot.js's, it spans from the blank after the backslash
+			// to the newline.
+			p.hardBreak(pos, skip)
+			p.pos = min(skip+1, len(src))
 		} else if next == ' ' {
 			p.pushNode(at(&Node{Tag: NonBreakingSpace}, pos+1, pos+2))
 			p.pos += 2
@@ -361,7 +369,8 @@ func (p *inlineParser) handleBackticks() {
 	after := pos + tickLen
 	closePos, ok := findClosingTicks(src, after, tickLen)
 	if !ok {
-		p.pushNode(at(&Node{Tag: Verbatim, Text: trimVerbatimContent(src[after:])}, pos, len(src)))
+		rest := p.unclosedRest(after)
+		p.pushNode(at(&Node{Tag: Verbatim, Text: trimVerbatimContent(rest)}, pos, after+len(rest)))
 		p.pos = len(src)
 		return
 	}
@@ -405,33 +414,46 @@ func (p *inlineParser) handleMath() {
 	p.pos += dollars
 }
 
-func (p *inlineParser) stripTrailingSpacesFromLastStr() {
+// hardBreak pushes the hard break the backslash at pos makes, spanning the
+// joined text after the backslash through the newline at nl (one past the
+// text when the line end follows it), after dropping the blanks of the text
+// that ends at the backslash.
+func (p *inlineParser) hardBreak(pos, nl int) {
+	p.trimLastText(pos, " \t")
+	p.pushNode(at(&Node{Tag: HardBreak}, pos+1, nl+1))
+}
+
+// trimLastText drops blanks from the end of the last text node when it is a
+// slice of the source ending at end: before a hard break (spaces and tabs)
+// or at the leaf's end (spaces only, a trailing tab being content there);
+// before a soft break they stay. djot.js trims its last match only when
+// that match is text, so the spaces before an empty attribute or a
+// comment, which make no node, stay.
+func (p *inlineParser) trimLastText(end int, blanks string) {
 	n := len(p.items)
 	if n == 0 || p.items[n-1].kind != itemNode {
 		return
 	}
 	last := p.items[n-1].node
-	if last.Tag != Str {
+	if last.Tag != Str || last.off == 0 || last.off-1+len(last.Text) != end {
 		return
 	}
-	last.Text = strings.TrimRight(last.Text, " \t")
+	last.Text = strings.TrimRight(last.Text, blanks)
 	if last.Text == "" {
 		p.items = p.items[:n-1]
 	}
 }
 
-func (p *inlineParser) trimTrailingWhitespace() {
-	for n := len(p.items); n > 0; n = len(p.items) {
-		it := p.items[n-1]
-		if it.kind != itemNode || it.node.Tag != Str {
-			return
-		}
-		it.node.Text = strings.TrimRight(it.node.Text, " \t")
-		if it.node.Text != "" {
-			return
-		}
-		p.items = p.items[:n-1]
+// unclosedRest is the text from from to the end, the span an unclosed
+// verbatim takes: at a leaf's end its trailing spaces go, as text's would
+// (djot.js trims the last match before the closing newline; a cell has
+// none).
+func (p *inlineParser) unclosedRest(from int) string {
+	rest := p.src[from:]
+	if p.endsLine {
+		return strings.TrimRight(rest, " ")
 	}
+	return rest
 }
 
 func bracedTag(char byte) Tag {
