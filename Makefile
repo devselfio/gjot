@@ -2,7 +2,7 @@ GO ?= go
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test spec-count spec-drift check tidy require-git-status-clear
+.PHONY: help build test spec-count spec-drift bench check tidy require-git-status-clear
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-26s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -18,6 +18,9 @@ spec-count: ## Print the spec corpus pass count
 
 spec-drift: ## Check the spec corpus against SHA256SUMS and, when online, zjot at the pinned tag
 	$(GO) run ./cmd/driftcheck
+
+bench: ## Run the benchmarks: the corpus and testdata/bench/page.dj through Parse, HTML, ASTText, Djot and JSON
+	$(GO) test -run '^$$' -bench . -benchmem .
 
 check: ## gofmt, go vet and go mod tidy -diff (the CI gate)
 	@unformatted=$$(gofmt -l .); \
