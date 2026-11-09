@@ -129,3 +129,24 @@ func TestWriterApostrophe(t *testing.T) {
 		}
 	}
 }
+
+// The writer keeps an ordered list's delimiter and start, so lists that
+// differ only in delimiter stay apart on re-parse (zjot.test L7142, L7165).
+func TestWriterOrderedMarkers(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"(1) a\n1) b\n1. c\n", "(1) a\n\n1) b\n\n1. c\n"},
+		{"1. a\n2. b\n\n3) c\n", "1. a\n2. b\n\n3) c\n"},
+		{"i. x\nj. y\n", "i. x\nj. y\n"},
+		{"iv) x\nv) y\n", "iv) x\nv) y\n"},
+		{"(C) x\n", "(C) x\n"},
+		{"{.x}\n5. a\n", "{.x}\n5. a\n"},
+	} {
+		djot, html := roundTrip(t, tc.src)
+		if djot != tc.want {
+			t.Errorf("wrote\n%s\nwant\n%s", djot, tc.want)
+		}
+		if want, _ := HTML(Parse([]byte(tc.src))); html != string(want) {
+			t.Errorf("%q: round trip changed HTML:\n---want---\n%s---got---\n%s", tc.src, want, html)
+		}
+	}
+}

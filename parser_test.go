@@ -435,3 +435,32 @@ func TestHeadingIDFromText(t *testing.T) {
 		}
 	}
 }
+
+// An ordered list node carries djot.js's style ("1.", "(a)", "I)") in Style
+// and its first marker's text in Text, from which its start is read; it has
+// no start or type attribute, so the AST prints the style alone
+// (zjot.test L6467, L6486, L7706).
+func TestOrderedListNode(t *testing.T) {
+	cases := []struct {
+		input       string
+		style, text string
+	}{
+		{"3) a\n4) b\n", "1)", "3"},
+		{"(a) x\n(b) y\n", "(a)", "a"},
+		{"i. x\nii. y\n", "i.", "i"},
+		{"i. x\nj. y\n", "a.", "i"},
+		{"IV. x\n", "I.", "IV"},
+	}
+	for _, c := range cases {
+		list := Parse([]byte(c.input)).Children[0]
+		if list.Tag != OrderedList || list.Style != c.style || list.Text != c.text || len(list.Attrs) != 0 {
+			t.Errorf("%q: got tag=%s style=%q text=%q attrs=%v; want ordered_list style=%q text=%q, no attrs",
+				c.input, list.Tag, list.Style, list.Text, list.Attrs, c.style, c.text)
+		}
+	}
+	want := "doc\n  ordered_list tight=true style=\"(a)\"\n    list_item\n      para\n        str text=\"x\"\n" +
+		"  ordered_list tight=true style=\"1)\"\n    list_item\n      para\n        str text=\"z\"\n"
+	if got := string(ASTText(Parse([]byte("(a) x\n\n5) z\n")))); got != want {
+		t.Errorf("AST text:\n---got---\n%s---want---\n%s", got, want)
+	}
+}

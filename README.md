@@ -85,7 +85,9 @@ html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 `Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
 through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the
 quote it was written as in `"source"` (`Node.Source`, empty on every other
-node), which alt text, heading ids and the writer read. Source positions are kept only
+node), which alt text, heading ids and the writer read. An ordered list keeps
+djot.js's style in `"style"` (`"1."`, `"(a)"`, `"I)"`) and its first marker's
+text in `"text"`, from which the HTML `start` is read. Source positions are kept only
 when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
 the inline nodes inside them. A definition list item's term and definition
 carry none, as zjot's AST prints none; the footnote section built at the end

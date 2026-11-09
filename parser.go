@@ -1,7 +1,6 @@
 package gjot
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -1178,9 +1177,10 @@ func (p *stackParser) tableBefore() *Node {
 	return nil
 }
 
-// listNodeOf is the node a closing list makes, in today's tree: a bullet or
-// task list with its tightness and first bullet, an ordered list with its
-// start and HTML type as attributes, or a definition list.
+// listNodeOf is the node a closing list makes: a bullet or task list with
+// its tightness and first bullet, an ordered list with djot.js's style
+// (the style it settled on, in its delimiter) and its first marker's text,
+// from which its start is read, or a definition list.
 func (p *stackParser) listNodeOf(c *container) *Node {
 	l := c.data.list
 	switch l.style {
@@ -1193,14 +1193,7 @@ func (p *stackParser) listNodeOf(c *container) *Node {
 		if len(l.ordered.possible) > 0 {
 			style = l.ordered.possible[0]
 		}
-		var attrs []Attr
-		if start := getListStart(l.markerText, style); start != 1 {
-			attrs = append(attrs, Attr{"start", strconv.Itoa(start)})
-		}
-		if t := style.htmlType(); t != "" {
-			attrs = append(attrs, Attr{"type", t})
-		}
-		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Attrs: attrs}
+		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Style: styleString(style, l.delim), Text: l.markerText}
 	}
 	return &Node{Tag: BulletList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
 }

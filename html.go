@@ -2,6 +2,7 @@ package gjot
 
 import (
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -167,7 +168,15 @@ func (r *renderer) render(n *Node) {
 		r.tight = old
 		r.w("</ul>\n")
 	case OrderedList:
+		// The list's own start and type come before its attributes, as
+		// djot.js.
 		r.w("<ol")
+		if start := orderedStart(n); start != 1 {
+			r.w(" start=\"" + strconv.Itoa(start) + "\"")
+		}
+		if style, _, ok := parseStyleString(n.Style); ok && style.htmlType() != "" {
+			r.w(" type=\"" + style.htmlType() + "\"")
+		}
 		r.attrs(n)
 		r.w(">\n")
 		old := r.tight

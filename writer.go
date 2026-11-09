@@ -83,22 +83,19 @@ func (d *djotWriter) block(n *Node) []string {
 	var lines []string
 	switch n.Tag {
 	case Section:
-		if a := attrSet(n, nil); a != "" {
+		if a := attrSet(n); a != "" {
 			lines = append(lines, a)
 		}
 		return append(lines, d.blocks(n.Children)...)
 	case Footnote:
 		return d.footnotes(n)
-	case OrderedList:
-		if a := attrSet(n, []string{"start", "type"}); a != "" {
-			lines = append(lines, a)
-		}
-		return append(lines, d.orderedList(n)...)
 	}
-	if a := attrSet(n, nil); a != "" {
+	if a := attrSet(n); a != "" {
 		lines = append(lines, a)
 	}
 	switch n.Tag {
+	case OrderedList:
+		return append(lines, d.orderedList(n)...)
 	case Para:
 		text := d.inlines(n.Children)
 		if strings.HasSuffix(text, "\n") {
@@ -217,20 +214,23 @@ func fenceLength(lines []string, char byte) int {
 	return n
 }
 
+// orderedList writes the items with markers counted from the list's start
+// in its style and delimiter, so the list re-parses to the same style and
+// start and stays apart from a neighbour of another delimiter.
 func (d *djotWriter) orderedList(n *Node) []string {
-	start := 1
-	if s, err := strconv.Atoi(n.Attr("start")); err == nil {
-		start = s
+	style, delim, ok := parseStyleString(n.Style)
+	if !ok {
+		style, delim = styleDecimal, delimPeriod
 	}
-	typ := n.Attr("type")
+	start := orderedStart(n)
 	var lines []string
 	for i, item := range n.Children {
 		if i > 0 && !n.Tight {
 			lines = append(lines, "")
 		}
-		marker := orderedMarker(start+i, typ, len(n.Children))
+		marker := orderedMarker(start+i, style, delim)
 		if marker == "" {
-			marker = orderedMarker(start, typ, 1)
+			marker = orderedMarker(start, style, delim)
 		}
 		lines = append(lines, d.item(item.Children, marker+" ", strings.Repeat(" ", len(marker)+1))...)
 	}
@@ -238,24 +238,34 @@ func (d *djotWriter) orderedList(n *Node) []string {
 }
 
 // orderedMarker is the marker for item number num in a list of the given
-// type, or "" when the type cannot count that far (alphabetic past z).
-func orderedMarker(num int, typ string, _ int) string {
-	switch typ {
-	case "a", "A":
+// style and delimiter, or "" when the style cannot count that far
+// (alphabetic past z).
+func orderedMarker(num int, style listStyle, d delim) string {
+	var number string
+	switch style {
+	case styleLowerAlpha, styleUpperAlpha:
 		if num < 1 || num > 26 {
 			return ""
 		}
 		c := byte('a' + num - 1)
-		if typ == "A" {
+		if style == styleUpperAlpha {
 			c = byte('A' + num - 1)
 		}
-		return string(rune(c)) + "."
-	case "i":
-		return strings.ToLower(roman(num)) + "."
-	case "I":
-		return roman(num) + "."
+		number = string(rune(c))
+	case styleLowerRoman:
+		number = strings.ToLower(roman(num))
+	case styleUpperRoman:
+		number = roman(num)
+	default:
+		number = strconv.Itoa(num)
 	}
-	return strconv.Itoa(num) + "."
+	switch d {
+	case delimParen:
+		return number + ")"
+	case delimParens:
+		return "(" + number + ")"
+	}
+	return number + "."
 }
 
 func roman(num int) string {
@@ -373,8 +383,8 @@ func withoutBacklink(blocks []*Node) []*Node {
 }
 
 // attrSet writes a node's attributes as `{#id .c k="v"}`, or "" when it has
-// none. Generated ids are left out, as are the keys in skip.
-func attrSet(n *Node, skip []string) string {
+// none. Generated ids are left out.
+func attrSet(n *Node) string {
 	var parts []string
 	if n.ID != "" && !n.AutoID {
 		parts = append(parts, "#"+n.ID)
@@ -391,15 +401,7 @@ func attrSet(n *Node, skip []string) string {
 			}
 			continue
 		}
-		skipped := false
-		for _, s := range skip {
-			if a.Key == s {
-				skipped = true
-			}
-		}
-		if !skipped {
-			parts = append(parts, a.Key+"=\""+attrValueEscaper.Replace(a.Value)+"\"")
-		}
+		parts = append(parts, a.Key+"=\""+attrValueEscaper.Replace(a.Value)+"\"")
 	}
 	if len(parts) == 0 {
 		return ""
@@ -523,7 +525,7 @@ func (w *inlineWriter) text(text string, apos []int, next *Node) {
 }
 
 func (w *inlineWriter) attrs(n *Node) {
-	w.write(attrSet(n, nil))
+	w.write(attrSet(n))
 }
 
 func (w *inlineWriter) node(n *Node, next *Node) {
@@ -591,7 +593,7 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		w.write("[")
 		w.bracketed(n.Children)
 		w.write("]")
-		if a := attrSet(n, nil); a != "" {
+		if a := attrSet(n); a != "" {
 			w.write(a)
 		} else {
 			w.write("{}")

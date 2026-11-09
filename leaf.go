@@ -339,6 +339,45 @@ const (
 	delimParens
 )
 
+// styleString is an ordered list's style as djot.js names it and the AST
+// prints it: the style's first number in the marker's delimiter, "1.",
+// "(a)" or "I)". An OrderedList node carries it in Style.
+func styleString(s listStyle, d delim) string {
+	number := "1"
+	if t := s.htmlType(); t != "" {
+		number = t
+	}
+	switch d {
+	case delimParen:
+		return number + ")"
+	case delimParens:
+		return "(" + number + ")"
+	}
+	return number + "."
+}
+
+// parseStyleString reads a style string back to its style and delimiter;
+// ok is false for anything styleString does not produce.
+func parseStyleString(style string) (s listStyle, d delim, ok bool) {
+	switch {
+	case len(style) == 3 && style[0] == '(' && style[2] == ')':
+		d = delimParens
+	case len(style) == 2 && style[1] == ')':
+		d = delimParen
+	case len(style) == 2 && style[1] == '.':
+		d = delimPeriod
+	default:
+		return 0, 0, false
+	}
+	number := style[len(style)-2]
+	for _, s := range []listStyle{styleDecimal, styleLowerAlpha, styleUpperAlpha, styleLowerRoman, styleUpperRoman} {
+		if styleString(s, d)[len(style)-2] == number {
+			return s, d, true
+		}
+	}
+	return 0, 0, false
+}
+
 // orderedStyles is the styles an ordered list may still be: a marker such
 // as "i." is roman or alphabetic until a later item decides.
 type orderedStyles struct {
@@ -523,6 +562,17 @@ func getListStart(markerText string, s listStyle) int {
 		return romanToNumber(markerText)
 	}
 	return 1
+}
+
+// orderedStart is the number an OrderedList node starts at: its first
+// marker's text (Text) read in its style (Style); 1 when the node has
+// neither.
+func orderedStart(n *Node) int {
+	s, _, ok := parseStyleString(n.Style)
+	if !ok {
+		return 1
+	}
+	return getListStart(n.Text, s)
 }
 
 // romanToNumber is the value of a roman numeral of either case, 1 when it

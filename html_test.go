@@ -84,3 +84,27 @@ func TestTaskListMergesClass(t *testing.T) {
 		})
 	}
 }
+
+// An ordered list's start and type come before its written attributes, as
+// djot.js (zjot.test L6455).
+func TestOrderedListAttributeOrder(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"zjot.test L6455", "{#i .x k=v}\ni. a\n", "<ol type=\"i\" id=\"i\" class=\"x\" k=\"v\">\n<li>\na\n</li>\n</ol>\n"},
+		{"start before id", "{#i}\n5) a\n", "<ol start=\"5\" id=\"i\">\n<li>\na\n</li>\n</ol>\n"},
+		{"start then type", "b) x\n", "<ol start=\"2\" type=\"a\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"roman before alpha", "c) x\n", "<ol start=\"100\" type=\"i\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"roman start", "(iv) x\n", "<ol start=\"4\" type=\"i\">\n<li>\nx\n</li>\n</ol>\n"},
+		{"decimal one", "1. x\n", "<ol>\n<li>\nx\n</li>\n</ol>\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := HTML(Parse([]byte(c.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
+			}
+		})
+	}
+}

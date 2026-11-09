@@ -104,6 +104,10 @@ type Range struct {
 // Node is one element of the Djot AST. The document root is a Section with
 // Level 0. String fields are "" when absent; Destination is nil when a link
 // has no destination, since an empty destination ("[a]()") renders href="".
+// A list's Style is djot.js's: the bullet of a bullet or task list, and for
+// an ordered list the style it settled on in its delimiter ("1.", "(a)",
+// "I)"); an ordered list's Text is its first marker's text ("3", "iv"),
+// from which its start is read.
 type Node struct {
 	Tag         Tag       `json:"tag"`
 	Children    []*Node   `json:"children,omitempty"`
