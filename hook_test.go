@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +103,48 @@ func TestNodeHasClassAndAttr(t *testing.T) {
 	}
 	if got := div.Attr("missing"); got != "" {
 		t.Errorf("Attr(missing) = %q, want empty", got)
+	}
+}
+
+// TestReadmeHookCompiles is the README's Library usage example as written
+// there, but for the gjot. qualifiers this package-internal test cannot
+// use: the hook, and a walk that type-switches on the kinds. Keep the two
+// in step.
+func TestReadmeHookCompiles(t *testing.T) {
+	doc := Parse([]byte("# Title\n\nSee [the docs](https://example.com).\n\n{fen=abc}\n::: chess\n:::\n"))
+	html, err := HTML(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Render fenced divs of a class yourself: `::: chess {fen=...}`
+	board := func(w io.Writer, n Node, entering bool) (WalkStatus, error) {
+		if entering {
+			fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
+		}
+		return WalkSkipChildren, nil
+	}
+	html, err = HTML(doc, WithHook("chess", board))
+
+	// Read the tree: one Go type per node kind, behind the Node interface.
+	Walk(doc, func(n Node) WalkStatus {
+		switch n := n.(type) {
+		case *Heading:
+			fmt.Println("heading", n.Level, n.ID)
+		case *Link:
+			if n.Destination != nil {
+				fmt.Println("link to", *n.Destination)
+			}
+		case *CodeBlock:
+			return WalkSkipChildren // a leaf; shown for the skip
+		}
+		return WalkContinue
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<chess-board fen=\"abc\"></chess-board>\n"; !strings.Contains(string(html), want) {
+		t.Errorf("HTML with the hook lacks %q:\n%s", want, html)
 	}
 }
