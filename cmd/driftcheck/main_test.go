@@ -213,7 +213,7 @@ func TestWorkflowRunsDriftcheck(t *testing.T) {
 		t.Fatalf("ci.yml runs make spec-drift %d times, want at most 1", count["spec-drift"])
 	}
 	if count["spec-drift"] == 0 {
-		t.Skip("ci.yml has no `run: make spec-drift` step; the maintainer commits it (swarm-gridapp#6); slice 2 turns this skip into a failure")
+		t.Fatal("ci.yml has no `run: make spec-drift` step after spec pass count (swarm-gridapp#6)")
 	}
 	if index["spec-drift"] < index["spec-count"] {
 		t.Fatalf("ci.yml runs make spec-drift at step %d, before make spec-count at step %d", index["spec-drift"], index["spec-count"])
