@@ -1,6 +1,7 @@
 package gjot
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -184,5 +185,67 @@ func TestFootnoteEndnotes(t *testing.T) {
 				t.Errorf("---input---\n%s---want---\n%s---got---\n%s", c.input, c.want, got)
 			}
 		})
+	}
+}
+
+// A link with no children renders its Text, as HTML did before the
+// renderers read the new tree; Parse never builds one, so only a
+// hand-built or decoded tree reaches this. ASTText and Djot never read a
+// link's Text and must keep not reading it.
+func TestLinkTextFallback(t *testing.T) {
+	u := "u"
+	link := func() *Node { return &Node{Tag: Link, Text: "visible <label>", Destination: &u} }
+	doc := func(inline *Node) *Node {
+		return &Node{Tag: Section, Children: []*Node{{Tag: Para, Children: []*Node{inline}}}}
+	}
+
+	got, err := HTML(link())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `<a href="u">visible &lt;label&gt;</a>`; string(got) != want {
+		t.Errorf("HTML(bare link) = %q, want %q", got, want)
+	}
+
+	got, err = HTML(doc(link()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<p><a href=\"u\">visible &lt;label&gt;</a></p>\n"; string(got) != want {
+		t.Errorf("HTML(doc) = %q, want %q", got, want)
+	}
+
+	// Children win over Text, as before.
+	withChild := link()
+	withChild.Children = []*Node{{Tag: Str, Text: "child"}}
+	got, err = HTML(doc(withChild))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<p><a href=\"u\">child</a></p>\n"; string(got) != want {
+		t.Errorf("HTML(link with child) = %q, want %q", got, want)
+	}
+
+	// A hook sees the link as it was handed in: Text kept, no children.
+	var seen *Node
+	_, err = HTML(&Node{Tag: Section, Children: []*Node{{Tag: Div, Attrs: []Attr{{"class", "h"}}, Children: []*Node{{Tag: Para, Children: []*Node{link()}}}}}},
+		WithHook("h", func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+			if entering {
+				seen = n.Children[0].Children[0]
+			}
+			return WalkContinue, nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen == nil || seen.Text != "visible <label>" || len(seen.Children) != 0 {
+		t.Errorf("hook saw link %+v, want Text kept and no children", seen)
+	}
+
+	if got, want := string(ASTText(doc(link()))), "doc\n  para\n    link destination=\"u\"\n"; got != want {
+		t.Errorf("ASTText = %q, want %q", got, want)
+	}
+	if got, want := string(Djot(doc(link()))), "[](u)\n"; got != want {
+		t.Errorf("Djot = %q, want %q", got, want)
 	}
 }

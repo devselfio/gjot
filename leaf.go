@@ -572,14 +572,14 @@ func getListStart(markerText string, s listStyle) int {
 }
 
 // orderedStart is the number an OrderedList node starts at: its first
-// marker's text (Text) read in its style (Style); 1 when the node has
+// marker's text (Marker) read in its style (Style); 1 when the node has
 // neither.
-func orderedStart(n *Node) int {
+func orderedStart(n *treeOrderedList) int {
 	s, _, ok := parseStyleString(n.Style)
 	if !ok {
 		return 1
 	}
-	return getListStart(n.Text, s)
+	return getListStart(n.Marker, s)
 }
 
 // romanToNumber is the value of a roman numeral of either case, 1 when it

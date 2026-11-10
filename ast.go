@@ -5,19 +5,20 @@ import "strconv"
 // ASTText renders doc in djot.js's indented AST text format, the format the
 // corpus compares against for its "a" cases.
 func ASTText(doc *Node) []byte {
-	return appendAST(nil, doc, 0, true)
+	return appendAST(nil, fromLegacy(doc), 0, true)
 }
 
-func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
+func appendAST(out []byte, n treeNode, indent int, isRoot bool) []byte {
 	for i := 0; i < indent; i++ {
 		out = append(out, ' ')
 	}
-	if isRoot && n.Tag == Section {
+	if _, ok := n.(*treeSection); isRoot && ok {
 		out = append(out, "doc"...)
 	} else {
-		out = append(out, n.Tag...)
+		out = append(out, n.Tag()...)
 	}
-	if p := n.Pos; p != nil {
+	h := n.header()
+	if p := h.Pos; p != nil {
 		out = append(out, " ("...)
 		out = appendPos(out, p.Start)
 		out = append(out, '-')
@@ -25,45 +26,49 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 		out = append(out, ')')
 	}
 
-	switch n.Tag {
-	case Symb:
-		if n.Text != "" {
+	// lang is a code block's language or a raw node's format, printed after
+	// the kind's own attributes.
+	var lang string
+	switch n := n.(type) {
+	case *treeSymb:
+		if n.Alias != "" {
 			out = append(out, " alias="...)
-			out = appendQuoted(out, n.Text)
+			out = appendQuoted(out, n.Alias)
 		}
-	case Str, Verbatim, RawInline, RawBlock, CodeBlock, FootnoteReference:
-		if n.Text != "" {
-			out = append(out, " text="...)
-			out = appendQuoted(out, n.Text)
-		}
-	case Heading:
+	case *treeStr:
+		out = appendText(out, n.Text)
+	case *treeVerbatim:
+		out = appendText(out, n.Text)
+	case *treeRawInline:
+		out = appendText(out, n.Text)
+		lang = n.Format
+	case *treeRawBlock:
+		out = appendText(out, n.Text)
+		lang = n.Format
+	case *treeCodeBlock:
+		out = appendText(out, n.Text)
+		lang = n.Lang
+	case *treeFootnoteReference:
+		out = appendText(out, n.Label)
+	case *treeHeading:
 		out = append(out, " level="...)
 		out = strconv.AppendInt(out, int64(n.Level), 10)
-	case Footnote:
+	case *treeFootnote:
 		out = append(out, " label="...)
-		out = appendQuoted(out, n.Text)
-	case BulletList, OrderedList:
-		out = appendBool(out, " tight=", n.Tight)
-		if n.Style != "" {
-			out = append(out, " style="...)
-			out = appendQuoted(out, n.Style)
-		}
-	case TaskListItem:
-		if n.Checked != nil {
-			out = appendBool(out, " checked=", *n.Checked)
-		}
-	case Link, Image, URL, Email:
-		if n.Destination != nil {
-			out = append(out, " destination="...)
-			out = appendQuoted(out, *n.Destination)
-		}
-		if n.Reference != "" {
-			out = append(out, " reference="...)
-			out = appendQuoted(out, n.Reference)
-		}
-	case Row:
+		out = appendQuoted(out, n.Label)
+	case *treeBulletList:
+		out = appendListAttrs(out, n.Tight, n.Style)
+	case *treeOrderedList:
+		out = appendListAttrs(out, n.Tight, n.Style)
+	case *treeTaskListItem:
+		out = appendBool(out, " checked=", n.Checked)
+	case *treeLink:
+		out = appendLinkAttrs(out, n.Destination, n.Reference)
+	case *treeImage:
+		out = appendLinkAttrs(out, n.Destination, n.Reference)
+	case *treeRow:
 		out = appendBool(out, " head=", n.Head)
-	case Cell:
+	case *treeCell:
 		out = appendBool(out, " head=", n.Head)
 		align := n.Align
 		if align == "" {
@@ -74,17 +79,17 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 		out = append(out, '"')
 	}
 
-	if n.Lang != "" {
+	if lang != "" {
 		out = append(out, " lang="...)
-		out = appendQuoted(out, n.Lang)
+		out = appendQuoted(out, lang)
 	}
 	// Attributes print as the corpus's converter orders them: id, class, then
 	// the rest in source order. The written id wins over a generated one, an
 	// empty `id=""` included (zjot ast.zig).
-	attrs := n.Attrs
-	if id, written := n.writtenID(); written || n.ID != "" {
+	attrs := h.Attrs
+	if id, written := h.writtenID(); written || h.ID != "" {
 		if !written {
-			id = n.ID
+			id = h.ID
 		}
 		out = append(out, " id="...)
 		out = appendQuoted(out, id)
@@ -104,8 +109,40 @@ func appendAST(out []byte, n *Node, indent int, isRoot bool) []byte {
 	}
 	out = append(out, '\n')
 
-	for _, c := range n.Children {
+	for _, c := range childrenOf(n) {
 		out = appendAST(out, c, indent+2, false)
+	}
+	return out
+}
+
+// appendText is a text kind's text attribute, none when the text is empty.
+func appendText(out []byte, text string) []byte {
+	if text == "" {
+		return out
+	}
+	out = append(out, " text="...)
+	return appendQuoted(out, text)
+}
+
+// appendListAttrs is a bullet or ordered list's tightness and style.
+func appendListAttrs(out []byte, tight bool, style string) []byte {
+	out = appendBool(out, " tight=", tight)
+	if style != "" {
+		out = append(out, " style="...)
+		out = appendQuoted(out, style)
+	}
+	return out
+}
+
+// appendLinkAttrs is a link's or image's destination and reference.
+func appendLinkAttrs(out []byte, dest *string, ref string) []byte {
+	if dest != nil {
+		out = append(out, " destination="...)
+		out = appendQuoted(out, *dest)
+	}
+	if ref != "" {
+		out = append(out, " reference="...)
+		out = appendQuoted(out, ref)
 	}
 	return out
 }

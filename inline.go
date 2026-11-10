@@ -1464,6 +1464,54 @@ func stringContent(nodes []*Node, footnoteLabels bool) string {
 	return b.String()
 }
 
+// treeStringContent is stringContent over the new tree, for the renderers;
+// the parser keeps stringContent until it builds the new tree.
+func treeStringContent(nodes []treeNode, footnoteLabels bool) string {
+	var b strings.Builder
+	var walk func([]treeNode)
+	walk = func(nodes []treeNode) {
+		for _, n := range nodes {
+			switch n := n.(type) {
+			case *treeStr:
+				if n.Source != "" {
+					b.WriteString(n.Source)
+				} else {
+					b.WriteString(n.Text)
+				}
+			case *treeVerbatim:
+				b.WriteString(n.Text)
+			case *treeInlineMath:
+				b.WriteString(n.Text)
+			case *treeDisplayMath:
+				b.WriteString(n.Text)
+			case *treeRawInline:
+				b.WriteString(n.Text)
+			case *treeURL:
+				b.WriteString(n.Text)
+			case *treeEmail:
+				b.WriteString(n.Text)
+			case *treeSoftBreak, *treeHardBreak:
+				b.WriteByte('\n')
+			case *treeEllipsis:
+				b.WriteString("...")
+			case *treeEmDash:
+				b.WriteString("---")
+			case *treeEnDash:
+				b.WriteString("--")
+			case *treeFootnoteReference:
+				if footnoteLabels {
+					b.WriteString(n.Label)
+				}
+			case *treeNonBreakingSpace, *treeSymb:
+			default:
+				walk(childrenOf(n))
+			}
+		}
+	}
+	walk(nodes)
+	return b.String()
+}
+
 // mergeRefAttrs layers a reference definition's attributes under the link's
 // own, as djot.js: the definition's that the link does not set come first,
 // then the link's own in their order; nothing joins.

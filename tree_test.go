@@ -198,3 +198,34 @@ func TestNodeKinds(t *testing.T) {
 		t.Error("linkFields ok on a url")
 	}
 }
+
+// toLegacy, which gives hooks the old node until Hook takes the new tree, is
+// fromLegacy's mirror: the old tree survives the round trip field for field,
+// the parse-time text offsets included, for every corpus input and the bench
+// page, with and without positions.
+func TestToLegacyMirrorsFromLegacy(t *testing.T) {
+	var same func(a, b *Node) bool
+	same = func(a, b *Node) bool {
+		if a.off != b.off || len(a.Children) != len(b.Children) {
+			return false
+		}
+		for i := range a.Children {
+			if !same(a.Children[i], b.Children[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	inputs := append(corpusInputs(t), readBenchPage(t))
+	for i, in := range inputs {
+		for _, opts := range [][]ParseOption{nil, {WithSourcePos()}} {
+			doc := Parse(in, opts...)
+			back := toLegacy(fromLegacy(doc))
+			want, _ := json.Marshal(doc)
+			got, _ := json.Marshal(back)
+			if !bytes.Equal(got, want) || !same(back, doc) {
+				t.Errorf("input %d %q (positions=%v): toLegacy(fromLegacy(doc)) differs\n got %s\nwant %s", i, in, len(opts) > 0, got, want)
+			}
+		}
+	}
+}

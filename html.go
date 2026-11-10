@@ -35,12 +35,15 @@ func WithHook(class string, h Hook) HTMLOption {
 	}
 }
 
-// renderer writes a Node tree as HTML into out. The first hook error stops
+// renderer writes the tree as HTML into out. The first hook error stops
 // all further output.
 type renderer struct {
 	out   []byte
 	hooks map[string]Hook
 	err   error
+	// linkTexts is the Text of each childless link of the old tree; see
+	// fromLegacyLinks.
+	linkTexts linkTexts
 	// tight is true while rendering the items of a tight bullet, ordered
 	// or task list, the innermost such list winning, and makes every
 	// paragraph below them render bare, however deep in block quotes,
@@ -54,7 +57,7 @@ type renderer struct {
 	// Footnote nodes met by label, footnoteLabels those labels in the
 	// order first met.
 	footnoteOrder  []string
-	footnoteDefs   map[string]*Node
+	footnoteDefs   map[string]*treeFootnote
 	footnoteLabels []string
 }
 
@@ -72,14 +75,14 @@ func (r *renderer) footnoteNumber(label string) int {
 // numberFootnotes numbers the footnote references the renderer would write
 // in n's tree: an image's children are its alt text, where a reference is
 // plain text.
-func (r *renderer) numberFootnotes(n *Node) {
-	if n.Tag == Image {
+func (r *renderer) numberFootnotes(n treeNode) {
+	switch n := n.(type) {
+	case *treeImage:
 		return
+	case *treeFootnoteReference:
+		r.footnoteNumber(n.Label)
 	}
-	if n.Tag == FootnoteReference {
-		r.footnoteNumber(n.Text)
-	}
-	for _, c := range n.Children {
+	for _, c := range childrenOf(n) {
 		r.numberFootnotes(c)
 	}
 }
@@ -140,19 +143,23 @@ func (r *renderer) endnotes() {
 		num := strconv.Itoa(i + 1)
 		backlink := "<a href=\"#fnref" + num + "\" role=\"doc-backlink\">↩︎</a>"
 		r.w("<li id=\"fn" + num + "\">\n")
-		var blocks []*Node
+		var blocks []treeNode
 		if def := r.footnoteDefs[r.footnoteOrder[i]]; def != nil {
 			blocks = def.Children
 		}
 		last := len(blocks) - 1
-		if last < 0 || blocks[last].Tag != Para {
+		var lastPara *treePara
+		if last >= 0 {
+			lastPara, _ = blocks[last].(*treePara)
+		}
+		if lastPara == nil {
 			last = len(blocks)
 		}
 		for _, b := range blocks[:last] {
 			r.render(b)
 		}
-		if last < len(blocks) {
-			r.para(blocks[last], backlink)
+		if lastPara != nil {
+			r.para(lastPara, backlink)
 		} else {
 			r.w("<p>" + backlink + "</p>\n")
 		}
@@ -169,14 +176,14 @@ func (r *renderer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (r *renderer) children(n *Node) {
-	for _, c := range n.Children {
+func (r *renderer) children(n treeNode) {
+	for _, c := range childrenOf(n) {
 		r.render(c)
 	}
 }
 
-func (r *renderer) hookFor(n *Node) Hook {
-	for _, c := range n.classList() {
+func (r *renderer) hookFor(n treeNode) Hook {
+	for _, c := range n.header().classList() {
 		if h, ok := r.hooks[c]; ok {
 			return h
 		}
@@ -184,8 +191,11 @@ func (r *renderer) hookFor(n *Node) Hook {
 	return nil
 }
 
-func (r *renderer) renderHooked(h Hook, n *Node) {
-	status, err := h(r, n, true)
+// renderHooked renders n through h. The hook is given n as the old tree's
+// node, converted once for both calls, until Hook takes the new tree.
+func (r *renderer) renderHooked(h Hook, n treeNode) {
+	legacy := toLegacyLinks(n, r.linkTexts)
+	status, err := h(r, legacy, true)
 	if err != nil {
 		r.err = err
 		return
@@ -196,23 +206,24 @@ func (r *renderer) renderHooked(h Hook, n *Node) {
 	if r.err != nil {
 		return
 	}
-	if _, err := h(r, n, false); err != nil {
+	if _, err := h(r, legacy, false); err != nil {
 		r.err = err
 	}
 }
 
-func (r *renderer) render(n *Node) {
+func (r *renderer) render(n treeNode) {
 	if r.err != nil {
 		return
 	}
-	if n.Tag == Div || n.Tag == Span {
+	switch n.(type) {
+	case *treeDiv, *treeSpan:
 		if h := r.hookFor(n); h != nil {
 			r.renderHooked(h, n)
 			return
 		}
 	}
-	switch n.Tag {
-	case Section:
+	switch n := n.(type) {
+	case *treeSection:
 		if n.Level > 0 {
 			r.w("<section")
 			r.attrs(n)
@@ -222,9 +233,9 @@ func (r *renderer) render(n *Node) {
 		} else {
 			r.children(n)
 		}
-	case Para:
+	case *treePara:
 		r.para(n, "")
-	case Heading:
+	case *treeHeading:
 		tag := "h6"
 		if n.Level >= 1 && n.Level <= 6 {
 			tag = "h" + string(rune('0'+n.Level))
@@ -234,11 +245,11 @@ func (r *renderer) render(n *Node) {
 		r.w(">")
 		r.children(n)
 		r.w("</" + tag + ">\n")
-	case ThematicBreak:
+	case *treeThematicBreak:
 		r.w("<hr")
 		r.attrs(n)
 		r.w(">\n")
-	case CodeBlock:
+	case *treeCodeBlock:
 		r.w("<pre")
 		r.attrs(n)
 		r.w("><code")
@@ -250,28 +261,25 @@ func (r *renderer) render(n *Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</code></pre>\n")
-	case BlockQuote:
+	case *treeBlockQuote:
 		r.w("<blockquote")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</blockquote>\n")
-	case Div:
+	case *treeDiv:
 		r.w("<div")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</div>\n")
-	case BulletList:
+	case *treeBulletList:
 		r.w("<ul")
 		r.attrs(n)
 		r.w(">\n")
-		old := r.tight
-		r.tight = n.Tight
-		r.listItems(n)
-		r.tight = old
+		r.listItems(n, n.Tight)
 		r.w("</ul>\n")
-	case OrderedList:
+	case *treeOrderedList:
 		// The list's own start and type come before its attributes, as
 		// djot.js.
 		r.w("<ol")
@@ -283,21 +291,15 @@ func (r *renderer) render(n *Node) {
 		}
 		r.attrs(n)
 		r.w(">\n")
-		old := r.tight
-		r.tight = n.Tight
-		r.listItems(n)
-		r.tight = old
+		r.listItems(n, n.Tight)
 		r.w("</ol>\n")
-	case TaskList:
+	case *treeTaskList:
 		r.w("<ul")
 		r.classed("task-list", n)
 		r.w(">\n")
-		old := r.tight
-		r.tight = n.Tight
-		r.listItems(n)
-		r.tight = old
+		r.listItems(n, n.Tight)
 		r.w("</ul>\n")
-	case ListItem:
+	case *treeListItem:
 		r.w("<li")
 		if n.ID != "" {
 			r.w(" id=\"")
@@ -307,31 +309,31 @@ func (r *renderer) render(n *Node) {
 		r.w(">\n")
 		r.children(n)
 		r.w("</li>\n")
-	case TaskListItem:
+	case *treeTaskListItem:
 		r.w("<li>\n")
 		r.children(n)
 		r.w("</li>\n")
-	case DefinitionList:
+	case *treeDefinitionList:
 		r.w("<dl")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</dl>\n")
-	case Term:
+	case *treeTerm:
 		r.w("<dt>")
 		r.children(n)
 		r.w("</dt>\n")
-	case Definition:
+	case *treeDefinition:
 		r.w("<dd>\n")
 		r.children(n)
 		r.w("</dd>\n")
-	case Table:
+	case *treeTable:
 		r.w("<table")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</table>\n")
-	case Caption:
+	case *treeCaption:
 		// Every table has one; an empty caption is not rendered.
 		if len(n.Children) > 0 {
 			r.w("<caption")
@@ -340,11 +342,11 @@ func (r *renderer) render(n *Node) {
 			r.children(n)
 			r.w("</caption>\n")
 		}
-	case Row:
+	case *treeRow:
 		r.w("<tr>\n")
 		r.children(n)
 		r.w("</tr>\n")
-	case Cell:
+	case *treeCell:
 		tag := "td"
 		if n.Head {
 			tag = "th"
@@ -356,34 +358,34 @@ func (r *renderer) render(n *Node) {
 		r.w(">")
 		r.children(n)
 		r.w("</" + tag + ">\n")
-	case Footnote:
+	case *treeFootnote:
 		// A definition renders nothing where it stands; its content is
 		// endnote N when the body references it (endnotes). A label defined
 		// again replaces the earlier content.
 		if r.footnoteDefs == nil {
-			r.footnoteDefs = map[string]*Node{}
+			r.footnoteDefs = map[string]*treeFootnote{}
 		}
-		if _, seen := r.footnoteDefs[n.Text]; !seen {
-			r.footnoteLabels = append(r.footnoteLabels, n.Text)
+		if _, seen := r.footnoteDefs[n.Label]; !seen {
+			r.footnoteLabels = append(r.footnoteLabels, n.Label)
 		}
-		r.footnoteDefs[n.Text] = n
-	case Str:
+		r.footnoteDefs[n.Label] = n
+	case *treeStr:
 		r.esc(n.Text)
-	case SoftBreak:
+	case *treeSoftBreak:
 		r.w("\n")
-	case HardBreak:
+	case *treeHardBreak:
 		r.w("<br>\n")
-	case Emph:
+	case *treeEmph:
 		r.wrap("em", n)
-	case Strong:
+	case *treeStrong:
 		r.wrap("strong", n)
-	case Verbatim:
+	case *treeVerbatim:
 		r.w("<code")
 		r.attrs(n)
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</code>")
-	case Link:
+	case *treeLink:
 		r.w("<a")
 		if n.Destination != nil {
 			r.w(" href=\"")
@@ -392,13 +394,13 @@ func (r *renderer) render(n *Node) {
 		}
 		r.attrs(n)
 		r.w(">")
-		if len(n.Children) > 0 {
-			r.children(n)
+		if t, ok := r.linkTexts[n]; ok {
+			r.esc(t)
 		} else {
-			r.esc(n.Text)
+			r.children(n)
 		}
 		r.w("</a>")
-	case Image:
+	case *treeImage:
 		r.w("<img alt=\"")
 		r.altText(n.Children)
 		r.w("\"")
@@ -409,16 +411,16 @@ func (r *renderer) render(n *Node) {
 		}
 		r.attrs(n)
 		r.w(">")
-	case Span:
+	case *treeSpan:
 		r.w("<span")
 		r.attrs(n)
 		r.w(">")
 		r.children(n)
 		r.w("</span>")
-	case FootnoteReference:
+	case *treeFootnoteReference:
 		// The tag writes its own id (fnrefN); a written id is dropped, not
 		// written twice (zjot.test difference 3).
-		num := strconv.Itoa(r.footnoteNumber(n.Text))
+		num := strconv.Itoa(r.footnoteNumber(n.Label))
 		r.w("<a id=\"fnref" + num + "\" href=\"#fn" + num + "\" role=\"doc-noteref\"")
 		for _, a := range n.Attrs {
 			if a.Key != "id" {
@@ -426,27 +428,27 @@ func (r *renderer) render(n *Node) {
 			}
 		}
 		r.w("><sup>" + num + "</sup></a>")
-	case Superscript:
+	case *treeSuperscript:
 		r.wrap("sup", n)
-	case Subscript:
+	case *treeSubscript:
 		r.wrap("sub", n)
-	case Insert:
+	case *treeInsert:
 		r.wrap("ins", n)
-	case Delete:
+	case *treeDelete:
 		r.wrap("del", n)
-	case Mark:
+	case *treeMark:
 		r.wrap("mark", n)
-	case InlineMath:
+	case *treeInlineMath:
 		r.classed("math inline", n)
 		r.w(">\\(")
 		r.esc(n.Text)
 		r.w("\\)</span>")
-	case DisplayMath:
+	case *treeDisplayMath:
 		r.classed("math display", n)
 		r.w(">\\[")
 		r.esc(n.Text)
 		r.w("\\]</span>")
-	case URL:
+	case *treeURL:
 		r.w("<a href=\"")
 		r.attrEsc(n.Text)
 		r.w("\"")
@@ -454,7 +456,7 @@ func (r *renderer) render(n *Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
-	case Email:
+	case *treeEmail:
 		r.w("<a href=\"mailto:")
 		r.attrEsc(n.Text)
 		r.w("\"")
@@ -462,30 +464,34 @@ func (r *renderer) render(n *Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
-	case Symb:
+	case *treeSymb:
 		// zjot's rendering (djot.js prints the `:alias:` text; difference 4).
 		r.classed("symbol", n)
 		r.w(">")
-		r.esc(n.Text)
+		r.esc(n.Alias)
 		r.w("</span>")
-	case DoubleQuoted:
+	case *treeDoubleQuoted:
 		r.w("\u201c")
 		r.children(n)
 		r.w("\u201d")
-	case SingleQuoted:
+	case *treeSingleQuoted:
 		r.w("\u2018")
 		r.children(n)
 		r.w("\u2019")
-	case NonBreakingSpace:
+	case *treeNonBreakingSpace:
 		r.w("&nbsp;")
-	case Ellipsis:
+	case *treeEllipsis:
 		r.w("\u2026")
-	case EmDash:
+	case *treeEmDash:
 		r.w("\u2014")
-	case EnDash:
+	case *treeEnDash:
 		r.w("\u2013")
-	case RawInline, RawBlock:
-		if n.Lang == "html" {
+	case *treeRawInline:
+		if n.Format == "html" {
+			r.w(n.Text)
+		}
+	case *treeRawBlock:
+		if n.Format == "html" {
 			r.w(n.Text)
 		}
 	default:
@@ -493,7 +499,7 @@ func (r *renderer) render(n *Node) {
 	}
 }
 
-func (r *renderer) wrap(tag string, n *Node) {
+func (r *renderer) wrap(tag string, n treeNode) {
 	r.w("<" + tag)
 	r.attrs(n)
 	r.w(">")
@@ -501,15 +507,18 @@ func (r *renderer) wrap(tag string, n *Node) {
 	r.w("</" + tag + ">")
 }
 
-func (r *renderer) altText(children []*Node) {
-	r.attrEsc(stringContent(children, true))
+func (r *renderer) altText(children []treeNode) {
+	r.attrEsc(treeStringContent(children, true))
 }
 
-func (r *renderer) listItems(list *Node) {
-	for _, item := range list.Children {
+// listItems writes a list's items with tight in force below them.
+func (r *renderer) listItems(list treeNode, tight bool) {
+	old := r.tight
+	r.tight = tight
+	for _, item := range childrenOf(list) {
 		r.w("<li>\n")
-		if item.Tag == TaskListItem {
-			if item.Checked != nil && *item.Checked {
+		if t, ok := item.(*treeTaskListItem); ok {
+			if t.Checked {
 				r.w("<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n")
 			} else {
 				r.w("<input disabled=\"\" type=\"checkbox\"/>\n")
@@ -518,11 +527,12 @@ func (r *renderer) listItems(list *Node) {
 		r.children(item)
 		r.w("</li>\n")
 	}
+	r.tight = old
 }
 
 // para writes a paragraph with trailer inside it after its content; bare
 // inside a tight list.
-func (r *renderer) para(n *Node, trailer string) {
+func (r *renderer) para(n *treePara, trailer string) {
 	if r.tight {
 		r.children(n)
 		r.w(trailer + "\n")
@@ -538,31 +548,32 @@ func (r *renderer) para(n *Node, trailer string) {
 // attrs writes the node's attributes in source order, as djot.js: its id
 // where an `id` was written (an empty `id=""` included, over a generated
 // id), or first when the document gave it.
-func (r *renderer) attrs(n *Node) {
-	r.filteredAttrs(n, false)
+func (r *renderer) attrs(n treeNode) {
+	r.filteredAttrs(n.header(), false)
 }
 
 // classed opens a span (or, for a task list, a ul) whose intrinsic class
 // the node's classes join, then writes its other attributes, as djot.js.
-func (r *renderer) classed(intrinsic string, n *Node) {
-	if n.Tag == TaskList {
+func (r *renderer) classed(intrinsic string, n treeNode) {
+	if _, ok := n.(*treeTaskList); ok {
 		r.w(" class=\"")
 	} else {
 		r.w("<span class=\"")
 	}
 	r.w(intrinsic)
-	for _, c := range n.classList() {
+	h := n.header()
+	for _, c := range h.classList() {
 		r.w(" ")
 		r.attrEsc(c)
 	}
 	r.w("\"")
-	r.filteredAttrs(n, true)
+	r.filteredAttrs(h, true)
 }
 
-func (r *renderer) filteredAttrs(n *Node, skipClass bool) {
-	attrs := n.Attrs
-	if n.ID != "" && !hasKey(attrs, "id") {
-		r.attr("id", n.ID)
+func (r *renderer) filteredAttrs(h *treeHeader, skipClass bool) {
+	attrs := h.Attrs
+	if h.ID != "" && !hasKey(attrs, "id") {
+		r.attr("id", h.ID)
 	}
 	for _, a := range attrs {
 		if skipClass && a.Key == "class" {

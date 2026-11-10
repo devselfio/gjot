@@ -13,11 +13,11 @@ import (
 // with their labels, where the ids their headings generated demand it
 // (due), else after the document.
 func Djot(doc *Node) []byte {
-	d := &djotWriter{ids: newIDs(), claims: map[*Node]*idClaims{}}
-	var body []*Node
-	for _, b := range doc.Children {
-		if b.Tag == Footnote {
-			d.defs = append(d.defs, b)
+	d := &djotWriter{ids: newIDs(), claims: map[treeNode]*idClaims{}}
+	var body []treeNode
+	for _, b := range childrenOf(fromLegacy(doc)) {
+		if f, ok := b.(*treeFootnote); ok {
+			d.defs = append(d.defs, f)
 		} else {
 			body = append(body, b)
 		}
@@ -49,10 +49,10 @@ type djotWriter struct {
 	// they are written (placed); bound is the index of the definition being
 	// written, or len(defs) outside one, since a definition nests only in
 	// one that closes after it. claims memoizes idClaims by node.
-	defs   []*Node
+	defs   []*treeFootnote
 	placed []bool
 	bound  int
-	claims map[*Node]*idClaims
+	claims map[treeNode]*idClaims
 }
 
 type refDefOut struct {
@@ -77,7 +77,7 @@ func (d *djotWriter) defineRef(label, url string) bool {
 
 // blocks renders sibling blocks as lines with one blank line between, the
 // footnote definitions due before a block written before it.
-func (d *djotWriter) blocks(blocks []*Node) []string {
+func (d *djotWriter) blocks(blocks []treeNode) []string {
 	var lines []string
 	for i, b := range blocks {
 		if i > 0 {
@@ -102,7 +102,7 @@ func joinBlocks(a, b []string) []string {
 
 // attrLines is a block's attribute line, none when it has no attributes,
 // its id registered where the line stands.
-func (d *djotWriter) attrLines(n *Node) []string {
+func (d *djotWriter) attrLines(n treeNode) []string {
 	a := attrSet(n)
 	if a == "" {
 		return nil
@@ -128,22 +128,22 @@ func indented(lines []string, first, rest, blank string) []string {
 	return out
 }
 
-func (d *djotWriter) block(n *Node) []string {
-	if n.Tag == Section {
-		if len(n.Children) > 0 && n.Children[0].Tag == Heading {
-			return d.blocks(unsectioned(n))
+func (d *djotWriter) block(n treeNode) []string {
+	if sec, ok := n.(*treeSection); ok {
+		if len(sec.Children) > 0 && isHeading(sec.Children[0]) {
+			return d.blocks(unsectioned(sec))
 		}
-		return append(d.attrLines(n), d.blocks(n.Children)...)
+		return append(d.attrLines(sec), d.blocks(sec.Children)...)
 	}
 	lines := d.attrLines(n)
-	switch n.Tag {
-	case Footnote:
+	switch n := n.(type) {
+	case *treeFootnote:
 		return append(lines, d.footnote(n, d.blocks(n.Children))...)
-	case OrderedList:
+	case *treeOrderedList:
 		return append(lines, d.orderedList(n)...)
-	case Para:
+	case *treePara:
 		return append(lines, d.leafLines(n.Children, "")...)
-	case Heading:
+	case *treeHeading:
 		hashes := strings.Repeat("#", n.Level)
 		carriers, explicit := d.headingID(n)
 		if explicit {
@@ -155,30 +155,23 @@ func (d *djotWriter) block(n *Node) []string {
 			return append(lines, hashes)
 		}
 		return append(lines, indented(d.leafLines(n.Children, carriers), hashes+" ", hashes+" ", "")...)
-	case ThematicBreak:
+	case *treeThematicBreak:
 		return append(lines, "* * *")
-	case CodeBlock, RawBlock:
-		content := strings.Split(strings.TrimSuffix(n.Text, "\n"), "\n")
-		if n.Text == "" {
-			content = nil
+	case *treeCodeBlock:
+		open := ""
+		if n.Lang != "" {
+			open = " " + n.Lang
 		}
-		fence := strings.Repeat("`", fenceLength(content, '`'))
-		open := fence
-		if n.Tag == RawBlock {
-			open += "=" + n.Lang
-		} else if n.Lang != "" {
-			open += " " + n.Lang
-		}
-		lines = append(lines, open)
-		lines = append(lines, content...)
-		return append(lines, fence)
-	case BlockQuote:
+		return append(lines, fenced(n.Text, open)...)
+	case *treeRawBlock:
+		return append(lines, fenced(n.Text, "="+n.Format)...)
+	case *treeBlockQuote:
 		inner := d.blocks(n.Children)
 		if len(inner) == 0 {
 			return append(lines, ">")
 		}
 		return append(lines, indented(inner, "> ", "> ", ">")...)
-	case Div:
+	case *treeDiv:
 		inner := d.blocks(n.Children)
 		fence := strings.Repeat(":", fenceLength(inner, ':'))
 		open := fence
@@ -188,31 +181,22 @@ func (d *djotWriter) block(n *Node) []string {
 		lines = append(lines, open)
 		lines = append(lines, inner...)
 		return append(lines, fence)
-	case BulletList, TaskList:
-		marker := n.Style
-		if marker == "" {
-			marker = "-"
-		}
-		return append(lines, d.listItems(n, func(_ int, item *Node) (string, string) {
-			switch {
-			case item.Tag != TaskListItem:
-				return marker, "  "
-			case item.Checked != nil && *item.Checked:
-				return marker + " [x]", "  "
-			}
-			return marker + " [ ]", "  "
-		})...)
-	case DefinitionList:
+	case *treeBulletList:
+		return append(lines, d.bulletItems(n.Style, n.Tight, n.Children)...)
+	case *treeTaskList:
+		return append(lines, d.bulletItems(n.Style, n.Tight, n.Children)...)
+	case *treeDefinitionList:
 		for i, item := range n.Children {
 			if i > 0 {
 				lines = append(lines, "")
 			}
-			var term, def *Node
-			for _, c := range item.Children {
-				switch c.Tag {
-				case Term:
+			var term *treeTerm
+			var def *treeDefinition
+			for _, c := range childrenOf(item) {
+				switch c := c.(type) {
+				case *treeTerm:
 					term = c
-				case Definition:
+				case *treeDefinition:
 					def = c
 				}
 			}
@@ -227,10 +211,46 @@ func (d *djotWriter) block(n *Node) []string {
 			}
 		}
 		return lines
-	case Table:
+	case *treeTable:
 		return append(lines, d.table(n)...)
 	}
 	return lines
+}
+
+func isHeading(n treeNode) bool {
+	_, ok := n.(*treeHeading)
+	return ok
+}
+
+// fenced is a code or raw block's lines: text between backtick fences, the
+// opening one followed by info (" lang" or "=format").
+func fenced(text, info string) []string {
+	content := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	if text == "" {
+		content = nil
+	}
+	fence := strings.Repeat("`", fenceLength(content, '`'))
+	lines := append([]string{fence + info}, content...)
+	return append(lines, fence)
+}
+
+// bulletItems renders a bullet or task list's items under its bullet
+// (style), a task list item's with its check box.
+func (d *djotWriter) bulletItems(style string, tight bool, items []treeNode) []string {
+	marker := style
+	if marker == "" {
+		marker = "-"
+	}
+	return d.listItems(items, tight, func(_ int, item treeNode) (string, string) {
+		t, ok := item.(*treeTaskListItem)
+		switch {
+		case !ok:
+			return marker, "  "
+		case t.Checked:
+			return marker + " [x]", "  "
+		}
+		return marker + " [ ]", "  "
+	})
 }
 
 // listItems renders a list's items, each under the marker and at the
@@ -240,15 +260,16 @@ func (d *djotWriter) block(n *Node) []string {
 // reference or footnote definition, a dropped block attribute or caption)
 // after a blank line in the item, so the item ends with `{}` after a blank
 // line, which reads back as nothing and keeps the list loose.
-func (d *djotWriter) listItems(n *Node, markerOf func(i int, item *Node) (marker, indent string)) []string {
+func (d *djotWriter) listItems(items []treeNode, tight bool, markerOf func(i int, item treeNode) (marker, indent string)) []string {
 	var lines []string
-	for i, item := range n.Children {
-		if i > 0 && !n.Tight {
+	for i, item := range items {
+		if i > 0 && !tight {
 			lines = append(lines, "")
 		}
 		marker, indent := markerOf(i, item)
-		lines = append(lines, d.item(item.Children, marker, indent)...)
-		if !n.Tight && len(n.Children) == 1 && len(item.Children) <= 1 {
+		blocks := childrenOf(item)
+		lines = append(lines, d.item(blocks, marker, indent)...)
+		if !tight && len(items) == 1 && len(blocks) <= 1 {
 			lines = append(lines, "", indent+"{}")
 		}
 	}
@@ -259,12 +280,12 @@ func (d *djotWriter) listItems(n *Node, markerOf func(i int, item *Node) (marker
 // the marker's line and the rest indented by rest. A thematic break goes
 // under a bare marker instead: the marker and `* * *` on one line read as a
 // thematic break.
-func (d *djotWriter) item(blocks []*Node, marker, rest string) []string {
+func (d *djotWriter) item(blocks []treeNode, marker, rest string) []string {
 	inner := d.blocks(blocks)
 	if len(inner) == 0 {
 		return []string{marker}
 	}
-	if blocks[0].Tag == ThematicBreak {
+	if _, ok := blocks[0].(*treeThematicBreak); ok {
 		return append([]string{marker}, indented(inner, rest, rest, "")...)
 	}
 	return indented(inner, marker+" ", rest, "")
@@ -285,13 +306,13 @@ func fenceLength(lines []string, char byte) int {
 // orderedList writes the items with markers counted from the list's start
 // in its style and delimiter, so the list re-parses to the same style and
 // start and stays apart from a neighbour of another delimiter.
-func (d *djotWriter) orderedList(n *Node) []string {
+func (d *djotWriter) orderedList(n *treeOrderedList) []string {
 	style, delim, ok := parseStyleString(n.Style)
 	if !ok {
 		style, delim = styleDecimal, delimPeriod
 	}
 	start := orderedStart(n)
-	return d.listItems(n, func(i int, _ *Node) (string, string) {
+	return d.listItems(n.Children, n.Tight, func(i int, _ treeNode) (string, string) {
 		marker := orderedMarker(start+i, style, delim)
 		if marker == "" {
 			marker = orderedMarker(start, style, delim)
@@ -348,16 +369,17 @@ func roman(num int) string {
 	return b.String()
 }
 
-func (d *djotWriter) table(n *Node) []string {
+func (d *djotWriter) table(n *treeTable) []string {
 	var lines []string
-	var caption *Node
+	var caption *treeCaption
 	first := true
-	for _, row := range n.Children {
-		if row.Tag == Caption {
-			caption = row
+	for _, c := range n.Children {
+		if c, ok := c.(*treeCaption); ok {
+			caption = c
 			continue
 		}
-		if row.Tag != Row {
+		row, ok := c.(*treeRow)
+		if !ok {
 			continue
 		}
 		if first && !row.Head && hasAlignment(row) {
@@ -366,7 +388,7 @@ func (d *djotWriter) table(n *Node) []string {
 		first = false
 		cells := make([]string, len(row.Children))
 		for i, c := range row.Children {
-			cells[i] = d.inlines(c.Children)
+			cells[i] = d.inlines(childrenOf(c))
 		}
 		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
 		if row.Head {
@@ -389,19 +411,27 @@ func (d *djotWriter) table(n *Node) []string {
 	return lines
 }
 
-func hasAlignment(row *Node) bool {
+// cellAlign is a row's child's alignment, "" for anything but a cell.
+func cellAlign(c treeNode) CellAlign {
+	if c, ok := c.(*treeCell); ok {
+		return c.Align
+	}
+	return ""
+}
+
+func hasAlignment(row *treeRow) bool {
 	for _, c := range row.Children {
-		if c.Align != "" && c.Align != AlignDefault {
+		if a := cellAlign(c); a != "" && a != AlignDefault {
 			return true
 		}
 	}
 	return false
 }
 
-func separatorLine(row *Node) string {
+func separatorLine(row *treeRow) string {
 	cells := make([]string, len(row.Children))
 	for i, c := range row.Children {
-		switch c.Align {
+		switch cellAlign(c) {
 		case AlignLeft:
 			cells[i] = ":--"
 		case AlignRight:
@@ -419,8 +449,8 @@ func separatorLine(row *Node) string {
 // content indented by the marker's width so a code block keeps its
 // indentation relative to its fence (the footnote's lines need only be
 // indented past the label's).
-func (d *djotWriter) footnote(n *Node, inner []string) []string {
-	marker := "[^" + n.Text + "]:"
+func (d *djotWriter) footnote(n *treeFootnote, inner []string) []string {
+	marker := "[^" + n.Label + "]:"
 	if len(inner) == 0 {
 		return []string{marker}
 	}
@@ -429,22 +459,36 @@ func (d *djotWriter) footnote(n *Node, inner []string) []string {
 
 // unsectioned is a section's blocks with its heading given back the id and
 // attributes the document moved onto the section (document.sections), so
-// the heading writes them and registers them where it stands.
-func unsectioned(sec *Node) []*Node {
-	h := *sec.Children[0]
+// the heading writes them and registers them where it stands. The heading
+// is copied, not changed in place.
+func unsectioned(sec *treeSection) []treeNode {
+	h := *sec.Children[0].(*treeHeading)
 	h.ID, h.AutoID = sec.ID, sec.AutoID
 	h.Attrs = append(append([]Attr{}, sec.Attrs...), h.Attrs...)
-	return append([]*Node{&h}, sec.Children[1:]...)
+	return append([]treeNode{&h}, sec.Children[1:]...)
+}
+
+// autoID reports whether n's ID was generated: only a heading's or a
+// section's can be.
+func autoID(n treeNode) bool {
+	switch n := n.(type) {
+	case *treeHeading:
+		return n.AutoID
+	case *treeSection:
+		return n.AutoID
+	}
+	return false
 }
 
 // explicitID is the id a node's attribute set writes, "" when none: the
 // written one, else the id the document gave the node when not generated.
-func explicitID(n *Node) string {
-	if id, written := n.writtenID(); written {
+func explicitID(n treeNode) string {
+	h := n.header()
+	if id, written := h.writtenID(); written {
 		return id
 	}
-	if !n.AutoID {
-		return n.ID
+	if !autoID(n) {
+		return h.ID
 	}
 	return ""
 }
@@ -473,8 +517,8 @@ func explicitID(n *Node) string {
 // When the id cannot be generated any more (a tree built by hand that
 // numbers headings out of order) explicit is set and the caller writes the
 // id on the heading.
-func (d *djotWriter) headingID(n *Node) (carriers string, explicit bool) {
-	text := stringContent(n.Children, false)
+func (d *djotWriter) headingID(n *treeHeading) (carriers string, explicit bool) {
+	text := treeStringContent(n.Children, false)
 	if n.ID == "" {
 		d.ids.generate(text)
 		return "", false
@@ -543,7 +587,7 @@ type idClaims struct {
 	explicit  map[string]bool
 }
 
-func (d *djotWriter) claimsOf(n *Node) *idClaims {
+func (d *djotWriter) claimsOf(n treeNode) *idClaims {
 	if c, ok := d.claims[n]; ok {
 		return c
 	}
@@ -553,22 +597,26 @@ func (d *djotWriter) claimsOf(n *Node) *idClaims {
 	return c
 }
 
-func (c *idClaims) collect(n *Node) {
-	if n.Tag == Section && len(n.Children) > 0 && n.Children[0].Tag == Heading {
-		for _, b := range unsectioned(n) {
-			c.collect(b)
+func (c *idClaims) collect(n treeNode) {
+	switch n := n.(type) {
+	case *treeSection:
+		if len(n.Children) > 0 && isHeading(n.Children[0]) {
+			for _, b := range unsectioned(n) {
+				c.collect(b)
+			}
+			return
 		}
-		return
-	}
-	if n.Tag == Heading && n.AutoID && n.ID != "" {
-		if g, ok := idTarget(stringContent(n.Children, false), n.ID); ok {
-			c.generated = append(c.generated, g)
+	case *treeHeading:
+		if n.AutoID && n.ID != "" {
+			if g, ok := idTarget(treeStringContent(n.Children, false), n.ID); ok {
+				c.generated = append(c.generated, g)
+			}
 		}
 	}
 	if id := explicitID(n); id != "" {
 		c.explicit[id] = true
 	}
-	for _, ch := range n.Children {
+	for _, ch := range childrenOf(n) {
 		c.collect(ch)
 	}
 }
@@ -576,7 +624,7 @@ func (c *idClaims) collect(n *Node) {
 // before reports whether an id a's headings generate must be registered
 // before b is re-parsed: b writes it, or a heading of b generated an id
 // that needed it taken.
-func (d *djotWriter) before(a, b *Node) bool {
+func (d *djotWriter) before(a, b treeNode) bool {
 	ca, cb := d.claimsOf(a), d.claimsOf(b)
 	for _, g := range ca.generated {
 		if cb.explicit[g.id] {
@@ -596,7 +644,7 @@ func (d *djotWriter) before(a, b *Node) bool {
 // of those (the definitions are in closing order, which the re-parse must
 // see again), and every later definition one of those must follow, which
 // it then nests in.
-func (d *djotWriter) due(next *Node) []string {
+func (d *djotWriter) due(next treeNode) []string {
 	k := -1
 	for i := 0; i < d.bound; i++ {
 		if !d.placed[i] && d.before(d.defs[i], next) {
@@ -620,7 +668,7 @@ func (d *djotWriter) due(next *Node) []string {
 // for one that must follow next (it stands inside next, as do those after
 // it) and for one that must follow a later definition up to k (it nests
 // there, written at its end at the latest).
-func (d *djotWriter) place(k int, next *Node) []string {
+func (d *djotWriter) place(k int, next treeNode) []string {
 	var lines []string
 	for i := 0; i <= k; i++ {
 		if d.placed[i] {
@@ -657,14 +705,15 @@ func (d *djotWriter) definition(i int) []string {
 // no attribute wrote first; a generated id is left out, as is the class a
 // div's fence carries. An id or class the short form cannot spell, an empty
 // id among them, is written as its key.
-func attrSet(n *Node) string {
-	attrs := n.Attrs
-	if n.Tag == Div {
+func attrSet(n treeNode) string {
+	h := n.header()
+	attrs := h.Attrs
+	if isKind[*treeDiv](n) {
 		attrs = withoutLastClass(attrs, divFenceClass(n))
 	}
 	var parts []string
-	if n.ID != "" && !n.AutoID && !hasKey(attrs, "id") {
-		parts = append(parts, attrPart("id", n.ID))
+	if h.ID != "" && !autoID(n) && !hasKey(attrs, "id") {
+		parts = append(parts, attrPart("id", h.ID))
 	}
 	for _, a := range attrs {
 		parts = append(parts, attrPart(a.Key, a.Value))
@@ -715,8 +764,8 @@ func allWords(words []string, ok func(byte) bool) bool {
 // last attribute, since the fence class joins after the block attribute
 // before it (`{.x}` then `::: y` reads back as `class="x y"`; `{.y k=v}`
 // then `:::` keeps its order only with `.y` in the attribute line).
-func divFenceClass(n *Node) string {
-	attrs := n.Attrs
+func divFenceClass(n treeNode) string {
+	attrs := n.header().Attrs
 	if len(attrs) == 0 || attrs[len(attrs)-1].Key != "class" {
 		return ""
 	}
@@ -776,13 +825,13 @@ type inlineWriter struct {
 // not trimmed, and a trailing hard break is written as its backslash alone,
 // which ends the leaf. prefix opens the leaf (a heading's id carriers),
 // written where the inlines see it: a quote after it is not at a line's start.
-func (d *djotWriter) leafLines(nodes []*Node, prefix string) []string {
+func (d *djotWriter) leafLines(nodes []treeNode, prefix string) []string {
 	w := newInlineWriter(d, true)
 	w.write(prefix)
 	w.nodes(nodes)
 	text := w.b.String()
 	switch {
-	case len(nodes) > 0 && nodes[len(nodes)-1].Tag == HardBreak:
+	case len(nodes) > 0 && isKind[*treeHardBreak](nodes[len(nodes)-1]):
 		text = strings.TrimSuffix(text, "\n")
 	case strings.HasSuffix(text, "\n"), strings.HasSuffix(text, " "):
 		text += "{}"
@@ -790,7 +839,7 @@ func (d *djotWriter) leafLines(nodes []*Node, prefix string) []string {
 	return strings.Split(text, "\n")
 }
 
-func (d *djotWriter) inlines(nodes []*Node) string {
+func (d *djotWriter) inlines(nodes []treeNode) string {
 	w := newInlineWriter(d, true)
 	w.nodes(nodes)
 	return w.b.String()
@@ -818,7 +867,13 @@ func (w *inlineWriter) prev() byte {
 	return s[len(s)-1]
 }
 
-func isText(n *Node) bool { return n.Tag == Str }
+func isText(n treeNode) bool { return isKind[*treeStr](n) }
+
+// isKind reports whether n is of kind K.
+func isKind[K treeNode](n treeNode) bool {
+	_, ok := n.(K)
+	return ok
+}
 
 // nodes writes a sequence, coalescing adjacent text nodes so escaping sees
 // the whole run (an escaped "." may have split "1." into two nodes). The run
@@ -828,16 +883,16 @@ func isText(n *Node) bool { return n.Tag == Str }
 // unclosed marked opener, an empty attribute, a smart quote's glyph) and
 // the written text keeps it. A smart quote carrying attributes is not text
 // but a quote (loneQuote).
-func (w *inlineWriter) nodes(nodes []*Node) {
+func (w *inlineWriter) nodes(nodes []treeNode) {
 	for i := 0; i < len(nodes); {
 		n := nodes[i]
 		j := i + 1
-		var next *Node
+		var next treeNode
 		if isText(n) && loneQuote(n) == "" {
 			var text strings.Builder
 			var apos, bounds []int
 			for j = i; j < len(nodes) && isText(nodes[j]) && loneQuote(nodes[j]) == ""; j++ {
-				t := nodes[j]
+				t := nodes[j].(*treeStr)
 				if t.Text == apostrophe && t.Source == "'" {
 					apos = append(apos, text.Len())
 				}
@@ -867,7 +922,7 @@ func (w *inlineWriter) nodes(nodes []*Node) {
 // braced form is used otherwise, or always when nested is set. An empty
 // pair closes nothing, so empty content is written as an empty attribute,
 // which makes no node and keeps the delimiters apart.
-func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces bool) {
+func (w *inlineWriter) delimited(n treeNode, char byte, braceOnly, nestedBraces bool) {
 	inner := w.content(n, char, false)
 	content := inner.b.String()
 	if content == "" {
@@ -898,7 +953,7 @@ func (w *inlineWriter) delimited(n *Node, char byte, braceOnly, nestedBraces boo
 }
 
 // text writes a run of text; apos and bounds are as for escapeText.
-func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
+func (w *inlineWriter) text(text string, apos, bounds []int, next treeNode) {
 	leadingBlanks := w.lineStart && text != "" && isInlineSpace(text[0])
 	if leadingBlanks {
 		w.write("{}") // the parser trims a line's leading whitespace
@@ -912,7 +967,7 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
 	}
 	w.write(out)
 	// A line of blanks alone would read back as an empty attribute block.
-	if leadingBlanks && strings.TrimLeft(text, " \t") == "" && (next == nil || next.Tag == SoftBreak) {
+	if leadingBlanks && strings.TrimLeft(text, " \t") == "" && (next == nil || isKind[*treeSoftBreak](next)) {
 		w.write("{}")
 	}
 }
@@ -923,11 +978,12 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next *Node) {
 // node's last word takes them). A right quote is a marked closer with no
 // marked opener to close, a left one an opener that pairs with nothing
 // (the plain " and the marked {'). "" for any other node.
-func loneQuote(n *Node) string {
-	if !isSmartQuote(n) || attrSet(n) == "" {
+func loneQuote(n treeNode) string {
+	s, ok := n.(*treeStr)
+	if !ok || s.Source == "" || attrSet(n) == "" {
 		return ""
 	}
-	switch n.Text {
+	switch s.Text {
 	case "\u201c":
 		return "\""
 	case "\u201d":
@@ -945,7 +1001,7 @@ func loneQuote(n *Node) string {
 // closer, and in rawQuote, so that an enclosing plain pair is braced too;
 // the marked opener is counted in openMarked. A right quote has one
 // spelling, which inside a braced pair of its quote closes that pair.
-func (w *inlineWriter) quote(n *Node) {
+func (w *inlineWriter) quote(n treeNode) {
 	spelling := loneQuote(n)
 	w.write(spelling)
 	w.attrs(n)
@@ -968,14 +1024,14 @@ func (w *inlineWriter) adopt(inner *inlineWriter) {
 }
 
 // attrs writes n's attribute set and registers its id where it stands.
-func (w *inlineWriter) attrs(n *Node) {
+func (w *inlineWriter) attrs(n treeNode) {
 	w.write(attrSet(n))
 	w.d.ids.register(explicitID(n))
 }
 
-func (w *inlineWriter) node(n *Node, next *Node) {
-	switch n.Tag {
-	case Str:
+func (w *inlineWriter) node(n treeNode, next treeNode) {
+	switch n := n.(type) {
+	case *treeStr:
 		// nodes, node's only caller, writes text runs itself; this case is
 		// kept so that a text node is never silently dropped.
 		if loneQuote(n) != "" {
@@ -983,70 +1039,57 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		} else {
 			w.text(n.Text, nil, nil, next)
 		}
-	case SoftBreak:
+	case *treeSoftBreak:
 		w.write("\n")
-		if next != nil && next.Tag == SoftBreak {
+		if next != nil && isKind[*treeSoftBreak](next) {
 			w.write("{}") // a line of its own, else the two breaks read as a blank line
 		}
-	case HardBreak:
+	case *treeHardBreak:
 		if isInlineSpace(w.prev()) {
 			w.write("{}") // the parser trims the blanks before a hard break
 		}
 		w.write("\\\n")
-	case NonBreakingSpace:
+	case *treeNonBreakingSpace:
 		w.write("\\ ")
-		if next == nil || next.Tag == SoftBreak || next.Tag == HardBreak {
+		if next == nil || isKind[*treeSoftBreak](next) || isKind[*treeHardBreak](next) {
 			w.write("{}")
 		}
-	case Emph:
+	case *treeEmph:
 		w.delimited(n, '_', false, false)
-	case Strong:
+	case *treeStrong:
 		w.delimited(n, '*', false, false)
-	case Superscript:
+	case *treeSuperscript:
 		w.delimited(n, '^', false, true)
-	case Subscript:
+	case *treeSubscript:
 		w.delimited(n, '~', false, true)
-	case Insert:
+	case *treeInsert:
 		w.delimited(n, '+', true, false)
-	case Delete:
+	case *treeDelete:
 		w.delimited(n, '-', true, false)
-	case Mark:
+	case *treeMark:
 		w.delimited(n, '=', true, false)
-	case DoubleQuoted:
+	case *treeDoubleQuoted:
 		w.delimited(n, '"', false, false)
-	case SingleQuoted:
+	case *treeSingleQuoted:
 		p := w.prev()
 		plainOK := p == 0 || strings.IndexByte(" \t\n\r\"'-([", p) >= 0
 		w.delimited(n, '\'', !plainOK, false)
-	case Verbatim:
+	case *treeVerbatim:
 		w.write(verbatim(n.Text))
 		w.attrs(n)
-	case RawInline:
-		w.write(verbatim(n.Text) + "{=" + n.Lang + "}")
-	case InlineMath:
+	case *treeRawInline:
+		w.write(verbatim(n.Text) + "{=" + n.Format + "}")
+	case *treeInlineMath:
 		w.write("$" + verbatim(n.Text))
 		w.attrs(n)
-	case DisplayMath:
+	case *treeDisplayMath:
 		w.write("$$" + verbatim(n.Text))
 		w.attrs(n)
-	case Link, Image:
-		if n.Tag == Image {
-			w.write("![")
-		} else {
-			w.write("[")
-		}
-		w.bracketed(n.Children)
-		w.write("]")
-		switch {
-		case n.Destination == nil:
-			w.write("[" + label(n.Reference) + "]")
-		case n.Reference != "" && w.d.defineRef(normalizeLabel(n.Reference), *n.Destination):
-			w.write("[" + label(n.Reference) + "]")
-		default:
-			w.write("(" + destination(*n.Destination) + ")")
-		}
-		w.attrs(n)
-	case Span:
+	case *treeLink:
+		w.link("[", n, n.Destination, n.Reference, n.Children)
+	case *treeImage:
+		w.link("![", n, n.Destination, n.Reference, n.Children)
+	case *treeSpan:
 		w.write("[")
 		w.bracketed(n.Children)
 		w.write("]")
@@ -1055,43 +1098,66 @@ func (w *inlineWriter) node(n *Node, next *Node) {
 		} else {
 			w.write("{}")
 		}
-	case URL, Email:
+	case *treeURL:
 		w.write("<" + n.Text + ">")
 		w.attrs(n)
-	case FootnoteReference:
-		// Its label; a written id is dropped, as the HTML drops it.
-		w.write("[^" + n.Text + "]")
-		w.attrs(&Node{Tag: FootnoteReference, Attrs: n.Attrs})
-	case Symb:
-		w.write(":" + n.Text + ":")
+	case *treeEmail:
+		w.write("<" + n.Text + ">")
 		w.attrs(n)
-	case Ellipsis:
+	case *treeFootnoteReference:
+		// Its label; a written id is dropped, as the HTML drops it.
+		w.write("[^" + n.Label + "]")
+		w.attrs(&treeFootnoteReference{treeHeader: treeHeader{Attrs: n.Attrs}})
+	case *treeSymb:
+		w.write(":" + n.Alias + ":")
+		w.attrs(n)
+	case *treeEllipsis:
 		w.write("...")
-	case EmDash, EnDash:
-		if w.prevDash {
-			w.write("{}")
-		}
-		if n.Tag == EmDash {
-			w.write("---")
-		} else {
-			w.write("--")
-		}
-		w.prevDash = true
+	case *treeEmDash:
+		w.dash("---")
+	case *treeEnDash:
+		w.dash("--")
 	default:
-		w.nodes(n.Children)
+		w.nodes(childrenOf(n))
 	}
+}
+
+// link writes a link or an image (open is "[" or "![") with its
+// destination, inline or by reference.
+func (w *inlineWriter) link(open string, n treeNode, dest *string, ref string, children []treeNode) {
+	w.write(open)
+	w.bracketed(children)
+	w.write("]")
+	switch {
+	case dest == nil:
+		w.write("[" + label(ref) + "]")
+	case ref != "" && w.d.defineRef(normalizeLabel(ref), *dest):
+		w.write("[" + label(ref) + "]")
+	default:
+		w.write("(" + destination(*dest) + ")")
+	}
+	w.attrs(n)
+}
+
+// dash writes an em or en dash, kept apart from a dash just written.
+func (w *inlineWriter) dash(s string) {
+	if w.prevDash {
+		w.write("{}")
+	}
+	w.write(s)
+	w.prevDash = true
 }
 
 // content writes n's children for a pair of char around them, in the plain
 // form or the braced one, with the enclosing delimiters remembered.
-func (w *inlineWriter) content(n *Node, char byte, braced bool) *inlineWriter {
+func (w *inlineWriter) content(n treeNode, char byte, braced bool) *inlineWriter {
 	inner := w.child()
 	inner.open[char]++
 	if braced {
 		inner.openMarked[char]++
 	}
 	inner.closer = string(rune(char))
-	inner.nodes(n.Children)
+	inner.nodes(childrenOf(n))
 	return inner
 }
 
@@ -1112,7 +1178,7 @@ func (w *inlineWriter) child() *inlineWriter {
 
 // bracketed writes link, image and span content. A lone quote written
 // inside is reported to the enclosing writer (see delimited).
-func (w *inlineWriter) bracketed(children []*Node) {
+func (w *inlineWriter) bracketed(children []treeNode) {
 	inner := w.child()
 	inner.closer = "]"
 	inner.inBrackets = true
@@ -1222,7 +1288,7 @@ func isSymbolChar(c byte) bool {
 // offsets of ’ that parsed from a ' and are written as ' again where that
 // reads back as an apostrophe (apostropheAfter); wrote reports whether one
 // was. bounds lists the offsets where a text node after the first starts.
-func (w *inlineWriter) escapeText(text string, next *Node, apos, bounds []int) (string, bool) {
+func (w *inlineWriter) escapeText(text string, next treeNode, apos, bounds []int) (string, bool) {
 	text, kinds, wrote := w.expand(text, apos, bounds)
 	after := w.after(next)
 	var b strings.Builder
@@ -1406,46 +1472,46 @@ func (w *inlineWriter) expand(text string, apos, bounds []int) (expanded string,
 // byte by), or with no next the enclosing closer. A pair that may be
 // written braced is given as its plain delimiter, which escapes at least
 // as much.
-func (w *inlineWriter) after(next *Node) string {
+func (w *inlineWriter) after(next treeNode) string {
 	if next == nil {
 		return w.closer
 	}
-	switch next.Tag {
-	case Emph:
+	switch next.(type) {
+	case *treeEmph:
 		return "_"
-	case Strong:
+	case *treeStrong:
 		return "*"
-	case Superscript:
+	case *treeSuperscript:
 		return "^"
-	case Subscript:
+	case *treeSubscript:
 		return "~"
-	case Insert, Delete, Mark:
+	case *treeInsert, *treeDelete, *treeMark:
 		return "{"
-	case DoubleQuoted:
+	case *treeDoubleQuoted:
 		return "\""
-	case SingleQuoted:
+	case *treeSingleQuoted:
 		return "'"
-	case Verbatim, RawInline:
+	case *treeVerbatim, *treeRawInline:
 		return "`"
-	case InlineMath:
+	case *treeInlineMath:
 		return "$`"
-	case DisplayMath:
+	case *treeDisplayMath:
 		return "$$`"
-	case Link, Span, FootnoteReference:
+	case *treeLink, *treeSpan, *treeFootnoteReference:
 		return "["
-	case Image:
+	case *treeImage:
 		return "!"
-	case URL, Email:
+	case *treeURL, *treeEmail:
 		return "<"
-	case Symb:
+	case *treeSymb:
 		return ":"
-	case Ellipsis:
+	case *treeEllipsis:
 		return "."
-	case EmDash, EnDash:
+	case *treeEmDash, *treeEnDash:
 		return "-"
-	case SoftBreak:
+	case *treeSoftBreak:
 		return "\n"
-	case HardBreak, NonBreakingSpace:
+	case *treeHardBreak, *treeNonBreakingSpace:
 		return "\\"
 	}
 	return ""
@@ -1498,7 +1564,7 @@ func braceOpensMarkup(tail string, run int) bool {
 // first bytes are unknown is taken to). No "}" comes after a leaf's last
 // run, unless it ends in a space, which leafLines keeps with an empty
 // attribute.
-func (w *inlineWriter) attrsCouldClose(tail string, next *Node) bool {
+func (w *inlineWriter) attrsCouldClose(tail string, next treeNode) bool {
 	switch feedAttr("{" + tail) {
 	case attrDone:
 		return true
