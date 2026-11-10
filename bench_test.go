@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -261,8 +262,86 @@ func TestBenchPageMix(t *testing.T) {
 	}
 }
 
-// TestNodeSize shows the node size the next milestone is measured against.
-// It logs and pins nothing.
+// TestNodeSize shows the old node's size and each kind's of the new tree,
+// and on a 64-bit platform fails if a common kind is 100 bytes or more.
 func TestNodeSize(t *testing.T) {
 	t.Logf("Node is %d bytes (unsafe.Sizeof)", unsafe.Sizeof(Node{}))
+	sizes := []struct {
+		kind treeNode
+		size uintptr
+	}{
+		{&treeSection{}, unsafe.Sizeof(treeSection{})},
+		{&treeHeading{}, unsafe.Sizeof(treeHeading{})},
+		{&treePara{}, unsafe.Sizeof(treePara{})},
+		{&treeThematicBreak{}, unsafe.Sizeof(treeThematicBreak{})},
+		{&treeCodeBlock{}, unsafe.Sizeof(treeCodeBlock{})},
+		{&treeRawBlock{}, unsafe.Sizeof(treeRawBlock{})},
+		{&treeBlockQuote{}, unsafe.Sizeof(treeBlockQuote{})},
+		{&treeDiv{}, unsafe.Sizeof(treeDiv{})},
+		{&treeBulletList{}, unsafe.Sizeof(treeBulletList{})},
+		{&treeTaskList{}, unsafe.Sizeof(treeTaskList{})},
+		{&treeOrderedList{}, unsafe.Sizeof(treeOrderedList{})},
+		{&treeDefinitionList{}, unsafe.Sizeof(treeDefinitionList{})},
+		{&treeListItem{}, unsafe.Sizeof(treeListItem{})},
+		{&treeTaskListItem{}, unsafe.Sizeof(treeTaskListItem{})},
+		{&treeDefinitionListItem{}, unsafe.Sizeof(treeDefinitionListItem{})},
+		{&treeTerm{}, unsafe.Sizeof(treeTerm{})},
+		{&treeDefinition{}, unsafe.Sizeof(treeDefinition{})},
+		{&treeTable{}, unsafe.Sizeof(treeTable{})},
+		{&treeCaption{}, unsafe.Sizeof(treeCaption{})},
+		{&treeRow{}, unsafe.Sizeof(treeRow{})},
+		{&treeCell{}, unsafe.Sizeof(treeCell{})},
+		{&treeFootnote{}, unsafe.Sizeof(treeFootnote{})},
+		{&treeStr{}, unsafe.Sizeof(treeStr{})},
+		{&treeSoftBreak{}, unsafe.Sizeof(treeSoftBreak{})},
+		{&treeHardBreak{}, unsafe.Sizeof(treeHardBreak{})},
+		{&treeNonBreakingSpace{}, unsafe.Sizeof(treeNonBreakingSpace{})},
+		{&treeEmph{}, unsafe.Sizeof(treeEmph{})},
+		{&treeStrong{}, unsafe.Sizeof(treeStrong{})},
+		{&treeSpan{}, unsafe.Sizeof(treeSpan{})},
+		{&treeMark{}, unsafe.Sizeof(treeMark{})},
+		{&treeSuperscript{}, unsafe.Sizeof(treeSuperscript{})},
+		{&treeSubscript{}, unsafe.Sizeof(treeSubscript{})},
+		{&treeInsert{}, unsafe.Sizeof(treeInsert{})},
+		{&treeDelete{}, unsafe.Sizeof(treeDelete{})},
+		{&treeDoubleQuoted{}, unsafe.Sizeof(treeDoubleQuoted{})},
+		{&treeSingleQuoted{}, unsafe.Sizeof(treeSingleQuoted{})},
+		{&treeVerbatim{}, unsafe.Sizeof(treeVerbatim{})},
+		{&treeInlineMath{}, unsafe.Sizeof(treeInlineMath{})},
+		{&treeDisplayMath{}, unsafe.Sizeof(treeDisplayMath{})},
+		{&treeRawInline{}, unsafe.Sizeof(treeRawInline{})},
+		{&treeURL{}, unsafe.Sizeof(treeURL{})},
+		{&treeEmail{}, unsafe.Sizeof(treeEmail{})},
+		{&treeFootnoteReference{}, unsafe.Sizeof(treeFootnoteReference{})},
+		{&treeSymb{}, unsafe.Sizeof(treeSymb{})},
+		{&treeLink{}, unsafe.Sizeof(treeLink{})},
+		{&treeImage{}, unsafe.Sizeof(treeImage{})},
+		{&treeEllipsis{}, unsafe.Sizeof(treeEllipsis{})},
+		{&treeEmDash{}, unsafe.Sizeof(treeEmDash{})},
+		{&treeEnDash{}, unsafe.Sizeof(treeEnDash{})},
+	}
+	if len(sizes) != len(nodeKinds) {
+		t.Errorf("the table lists %d kinds, nodeKinds %d", len(sizes), len(nodeKinds))
+	}
+	var table strings.Builder
+	for _, s := range sizes {
+		fmt.Fprintf(&table, "\n  %-22s %3d", s.kind.Tag(), s.size)
+	}
+	t.Logf("kind sizes in bytes (unsafe.Sizeof):%s", table.String())
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("the 100-byte bound is for 64-bit platforms")
+	}
+	common := map[Tag]bool{"str": true, "para": true, "emph": true, "strong": true, "link": true, "image": true,
+		"heading": true, "section": true, "list_item": true, "bullet_list": true, "span": true, "verbatim": true}
+	for _, s := range sizes {
+		if common[s.kind.Tag()] {
+			delete(common, s.kind.Tag())
+			if s.size >= 100 {
+				t.Errorf("%s is %d bytes, want under 100", s.kind.Tag(), s.size)
+			}
+		}
+	}
+	for tag := range common {
+		t.Errorf("common kind %s is not in the table", tag)
+	}
 }
