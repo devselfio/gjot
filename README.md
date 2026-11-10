@@ -185,6 +185,9 @@ AST text and the HTML, with and without source positions.
 `TestTreeJSONIdentical` pins the wire form to the JSON gjot wrote before the
 tree had a type per kind, and checks that every case's JSON decodes to a tree
 that encodes to the same bytes.
+`TestWriterRoundTripWithSourcePos` checks that a tree parsed with source
+positions is written byte for byte as one parsed without them, and reads back
+to the source's HTML, over every case and the bench page.
 
 `make spec-drift` (or `go run ./cmd/driftcheck`) checks that corpus against the
 tag pinned in `ORIGIN.md`, which must be a `vN.N.N` tag, never a branch.
@@ -386,7 +389,8 @@ cmd/driftcheck   Corpus drift check against zjot
     `UnmarshalNode(data []byte) (Node, error)` to decode a node of any kind
     (`json.Unmarshal` cannot fill an interface).
   - Unchanged: the JSON form, byte for byte, its field names and its
-    `"tag"` discriminator included; `json.Unmarshal` into a `*Section`
+    `"tag"` discriminator included, though `json.Marshal(doc)` is slower (see
+    Benchmarks); `json.Unmarshal` into a `*Section`
     decodes a document. A hook or a consumer that read `n.Tag` and fields
     now type-switches: `switch n := n.(type) { case *gjot.Heading: ... }`
     (see Library usage).
