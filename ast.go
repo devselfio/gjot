@@ -4,8 +4,8 @@ import "strconv"
 
 // ASTText renders doc in djot.js's indented AST text format, the format the
 // corpus compares against for its "a" cases.
-func ASTText(doc *Node) []byte {
-	return appendAST(nil, fromLegacy(doc), 0, true)
+func ASTText(doc treeNode) []byte {
+	return appendAST(nil, doc, 0, true)
 }
 
 func appendAST(out []byte, n treeNode, indent int, isRoot bool) []byte {

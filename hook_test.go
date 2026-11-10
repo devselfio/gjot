@@ -17,7 +17,7 @@ func renderWith(t *testing.T, src string, opts ...HTMLOption) string {
 }
 
 func TestHookReplacesDivByClass(t *testing.T) {
-	chess := func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+	chess := func(w io.Writer, n treeNode, entering bool) (WalkStatus, error) {
 		if entering {
 			fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
 		}
@@ -31,7 +31,7 @@ func TestHookReplacesDivByClass(t *testing.T) {
 
 func TestHookWrapsChildrenAndNests(t *testing.T) {
 	wrap := func(open, close string) Hook {
-		return func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+		return func(w io.Writer, n treeNode, entering bool) (WalkStatus, error) {
 			if entering {
 				io.WriteString(w, open)
 			} else {
@@ -50,7 +50,7 @@ func TestHookWrapsChildrenAndNests(t *testing.T) {
 // A hook stands in for the div only: the enclosing tight list still renders
 // the paragraphs inside it bare, as it does an unhooked div's.
 func TestHookInTightItemKeepsListTightness(t *testing.T) {
-	aside := func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+	aside := func(w io.Writer, n treeNode, entering bool) (WalkStatus, error) {
 		if entering {
 			io.WriteString(w, "<aside>\n")
 		} else {
@@ -65,7 +65,7 @@ func TestHookInTightItemKeepsListTightness(t *testing.T) {
 }
 
 func TestHookUnregisteredClassRendersDefault(t *testing.T) {
-	got := renderWith(t, "{fen=abc}\n::: chess\n:::\n", WithHook("other", func(io.Writer, *Node, bool) (WalkStatus, error) {
+	got := renderWith(t, "{fen=abc}\n::: chess\n:::\n", WithHook("other", func(io.Writer, treeNode, bool) (WalkStatus, error) {
 		t.Error("hook for another class called")
 		return WalkContinue, nil
 	}))
@@ -76,7 +76,7 @@ func TestHookUnregisteredClassRendersDefault(t *testing.T) {
 
 func TestHookErrorAbortsRender(t *testing.T) {
 	boom := errors.New("boom")
-	_, err := HTML(Parse([]byte("::: x\n:::\n")), WithHook("x", func(io.Writer, *Node, bool) (WalkStatus, error) {
+	_, err := HTML(Parse([]byte("::: x\n:::\n")), WithHook("x", func(io.Writer, treeNode, bool) (WalkStatus, error) {
 		return WalkContinue, boom
 	}))
 	if !errors.Is(err, boom) {
@@ -86,7 +86,7 @@ func TestHookErrorAbortsRender(t *testing.T) {
 
 func TestNodeHasClassAndAttr(t *testing.T) {
 	doc := Parse([]byte("{#id .a .b k=v}\n::: c\n:::\n"))
-	div := doc.Children[0]
+	div := doc.(*treeSection).Children[0]
 	// The fence class joins the block attribute's classes, as djot.js
 	// (zjot.test L6431), so every one of them is found.
 	for _, c := range []string{"a", "b", "c"} {

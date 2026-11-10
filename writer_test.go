@@ -357,14 +357,14 @@ func TestWriterTextEscapes(t *testing.T) {
 func TestWriterEscapesMarkupInText(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		para []*Node
+		para []treeNode
 	}{
-		{"markup-in-text", []*Node{{Tag: Str, Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
-		{"own-closer-inside-insert", []*Node{{Tag: Insert, Children: []*Node{{Tag: Str, Text: "a +} b"}}}}},
-		{"own-closer-inside-braced-emph", []*Node{{Tag: Emph, Children: []*Node{{Tag: Str, Text: " a _} b"}}}}},
+		{"markup-in-text", []treeNode{&treeStr{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
+		{"own-closer-inside-insert", []treeNode{&treeInsert{Children: []treeNode{&treeStr{Text: "a +} b"}}}}},
+		{"own-closer-inside-braced-emph", []treeNode{&treeEmph{Children: []treeNode{&treeStr{Text: " a _} b"}}}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			doc := &Node{Tag: Section, Children: []*Node{{Tag: Para, Children: c.para}}}
+			doc := &treeSection{Children: []treeNode{&treePara{Children: c.para}}}
 			djot := Djot(doc)
 			got, err := HTML(Parse(djot))
 			if err != nil {
@@ -522,9 +522,9 @@ func TestWriterRegistersIDs(t *testing.T) {
 // (a tree built by hand: the id a later heading of the same text would get)
 // is written with the id explicit, so its HTML stands.
 func TestWriterExplicitIDFallback(t *testing.T) {
-	doc := &Node{Tag: Section, Children: []*Node{
-		{Tag: Section, Level: 1, ID: "a-1", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
-		{Tag: Section, Level: 1, ID: "a", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
+	doc := &treeSection{Children: []treeNode{
+		&treeSection{treeHeader: treeHeader{ID: "a-1"}, Level: 1, AutoID: true, Children: []treeNode{&treeHeading{Level: 1, Children: []treeNode{&treeStr{Text: "a"}}}}},
+		&treeSection{treeHeader: treeHeader{ID: "a"}, Level: 1, AutoID: true, Children: []treeNode{&treeHeading{Level: 1, Children: []treeNode{&treeStr{Text: "a"}}}}},
 	}}
 	djot := string(Djot(doc))
 	want := "# {#a}a\n\n{#a}\n# a\n"

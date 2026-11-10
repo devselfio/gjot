@@ -12,10 +12,10 @@ import (
 // definitions are written as inline destinations and footnote definitions
 // with their labels, where the ids their headings generated demand it
 // (due), else after the document.
-func Djot(doc *Node) []byte {
+func Djot(doc treeNode) []byte {
 	d := &djotWriter{ids: newIDs(), claims: map[treeNode]*idClaims{}}
 	var body []treeNode
-	for _, b := range childrenOf(fromLegacy(doc)) {
+	for _, b := range childrenOf(doc) {
 		if f, ok := b.(*treeFootnote); ok {
 			d.defs = append(d.defs, f)
 		} else {

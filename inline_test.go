@@ -58,20 +58,16 @@ func TestEveryInlineNodeHasPosition(t *testing.T) {
 	src := "a _b_ *c* [l](u) ![i](u) [s]{.x} `v` x\\\ny\\ z {=m=} {+i+} {-d-} " +
 		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u ]{.c} {\"q <y ![i] { a\\\n"
 	doc := Parse([]byte(src), WithSourcePos())
-	var walk func(n *Node)
-	walk = func(n *Node) {
-		for _, c := range n.Children {
-			if c.Pos == nil {
-				t.Errorf("%s %q has no position", c.Tag, c.Text)
-			}
-			walk(c)
+	para, ok := childrenOf(doc)[0].(*treePara)
+	if !ok {
+		t.Fatalf("got %s, want para", childrenOf(doc)[0].Tag())
+	}
+	treeWalk(para, func(n treeNode) WalkStatus {
+		if n != treeNode(para) && n.header().Pos == nil {
+			t.Errorf("%s %q has no position", n.Tag(), inlineText([]treeNode{n}))
 		}
-	}
-	para := doc.Children[0]
-	if para.Tag != Para {
-		t.Fatalf("got %s, want para", para.Tag)
-	}
-	walk(para)
+		return WalkContinue
+	})
 }
 
 // The newline that joins two lines resolves to the next line, column 0, at

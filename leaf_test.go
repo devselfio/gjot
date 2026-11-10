@@ -117,11 +117,11 @@ func TestLeafCarriageReturn(t *testing.T) {
 	for _, src := range []string{"#\rx", ">\rx"} {
 		doc := Parse([]byte(src))
 		var tags []Tag
-		for _, c := range doc.Children {
-			tags = append(tags, c.Tag)
+		for _, c := range childrenOf(doc) {
+			tags = append(tags, c.Tag())
 		}
-		if len(tags) != 1 || tags[0] != Para {
-			t.Errorf("Parse(%q) children = %v, want [%s]", src, tags, Para)
+		if len(tags) != 1 || tags[0] != "para" {
+			t.Errorf("Parse(%q) children = %v, want [para]", src, tags)
 		}
 	}
 }

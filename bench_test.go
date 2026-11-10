@@ -55,17 +55,18 @@ func readBenchPage(tb testing.TB) []byte {
 }
 
 // countNodes is the size of the tree under n, n included.
-func countNodes(n *Node) int {
-	count := 1
-	for _, c := range n.Children {
-		count += countNodes(c)
-	}
+func countNodes(n treeNode) int {
+	count := 0
+	treeWalk(n, func(treeNode) WalkStatus {
+		count++
+		return WalkContinue
+	})
 	return count
 }
 
 // parseAll parses every input and returns the trees and their node count.
-func parseAll(inputs [][]byte, opts ...ParseOption) ([]*Node, int) {
-	trees := make([]*Node, len(inputs))
+func parseAll(inputs [][]byte, opts ...ParseOption) ([]treeNode, int) {
+	trees := make([]treeNode, len(inputs))
 	nodes := 0
 	for i, in := range inputs {
 		trees[i] = Parse(in, opts...)
@@ -138,7 +139,7 @@ func benchPaths(b *testing.B, inputs [][]byte) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if err := json.Unmarshal(data, &Node{}); err != nil {
+				if _, err := treeUnmarshalNode(data); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -241,20 +242,17 @@ func TestBenchPageMix(t *testing.T) {
 	}
 	seen := map[Tag]bool{}
 	attrs := false
-	var walk func(n *Node)
-	walk = func(n *Node) {
-		seen[n.Tag] = true
-		if len(n.Attrs) > 0 {
+	treeWalk(doc, func(n treeNode) WalkStatus {
+		seen[n.Tag()] = true
+		if len(n.header().Attrs) > 0 {
 			attrs = true
 		}
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-	walk(doc)
-	for _, tag := range []Tag{Heading, Para, BulletList, OrderedList, BlockQuote, Table, CodeBlock, Footnote, FootnoteReference, Link, Emph, Strong, Verbatim, Span} {
-		if !seen[tag] {
-			t.Errorf("page has no %s node", tag)
+		return WalkContinue
+	})
+	for _, kind := range []treeNode{&treeHeading{}, &treePara{}, &treeBulletList{}, &treeOrderedList{}, &treeBlockQuote{}, &treeTable{},
+		&treeCodeBlock{}, &treeFootnote{}, &treeFootnoteReference{}, &treeLink{}, &treeEmph{}, &treeStrong{}, &treeVerbatim{}, &treeSpan{}} {
+		if !seen[kind.Tag()] {
+			t.Errorf("page has no %s node", kind.Tag())
 		}
 	}
 	if !attrs {
@@ -262,10 +260,9 @@ func TestBenchPageMix(t *testing.T) {
 	}
 }
 
-// TestNodeSize shows the old node's size and each kind's of the new tree,
-// and on a 64-bit platform fails if a common kind is 100 bytes or more.
+// TestNodeSize shows each kind's size, and on a 64-bit platform fails if a
+// common kind is 100 bytes or more.
 func TestNodeSize(t *testing.T) {
-	t.Logf("Node is %d bytes (unsafe.Sizeof)", unsafe.Sizeof(Node{}))
 	sizes := []struct {
 		kind treeNode
 		size uintptr

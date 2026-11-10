@@ -22,7 +22,7 @@ const (
 // with entering true before the children and entering false after them;
 // the exit call's WalkStatus is ignored. Returning an error aborts the
 // render and HTML returns it.
-type Hook func(w io.Writer, n *Node, entering bool) (WalkStatus, error)
+type Hook func(w io.Writer, n treeNode, entering bool) (WalkStatus, error)
 
 // WithHook registers h for every div or span that has class. When a node
 // has several registered classes, the first in its class list wins.
@@ -41,9 +41,6 @@ type renderer struct {
 	out   []byte
 	hooks map[string]Hook
 	err   error
-	// linkTexts is the Text of each childless link of the old tree; see
-	// fromLegacyLinks.
-	linkTexts linkTexts
 	// tight is true while rendering the items of a tight bullet, ordered
 	// or task list, the innermost such list winning, and makes every
 	// paragraph below them render bare, however deep in block quotes,
@@ -191,11 +188,9 @@ func (r *renderer) hookFor(n treeNode) Hook {
 	return nil
 }
 
-// renderHooked renders n through h. The hook is given n as the old tree's
-// node, converted once for both calls, until Hook takes the new tree.
+// renderHooked renders n through h.
 func (r *renderer) renderHooked(h Hook, n treeNode) {
-	legacy := toLegacyLinks(n, r.linkTexts)
-	status, err := h(r, legacy, true)
+	status, err := h(r, n, true)
 	if err != nil {
 		r.err = err
 		return
@@ -206,7 +201,7 @@ func (r *renderer) renderHooked(h Hook, n treeNode) {
 	if r.err != nil {
 		return
 	}
-	if _, err := h(r, legacy, false); err != nil {
+	if _, err := h(r, n, false); err != nil {
 		r.err = err
 	}
 }
@@ -394,11 +389,7 @@ func (r *renderer) render(n treeNode) {
 		}
 		r.attrs(n)
 		r.w(">")
-		if t, ok := r.linkTexts[n]; ok {
-			r.esc(t)
-		} else {
-			r.children(n)
-		}
+		r.children(n)
 		r.w("</a>")
 	case *treeImage:
 		r.w("<img alt=\"")
