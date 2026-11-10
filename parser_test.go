@@ -236,10 +236,10 @@ func TestStackUnits(t *testing.T) {
 
 // positionedBlocks are the block kinds that carry a position under
 // WithSourcePos (issue #16), at any depth.
-var positionedBlocks = []treeNode{
-	&treeBlockQuote{}, &treeHeading{}, &treeSection{}, &treeCodeBlock{}, &treeRawBlock{}, &treeDiv{}, &treeThematicBreak{},
-	&treeTable{}, &treeRow{}, &treeCell{}, &treeCaption{}, &treeDefinitionList{}, &treeDefinitionListItem{},
-	&treeBulletList{}, &treeOrderedList{}, &treeTaskList{}, &treeListItem{}, &treeTaskListItem{},
+var positionedBlocks = []Node{
+	&BlockQuote{}, &Heading{}, &Section{}, &CodeBlock{}, &RawBlock{}, &Div{}, &ThematicBreak{},
+	&Table{}, &Row{}, &Cell{}, &Caption{}, &DefinitionList{}, &DefinitionListItem{},
+	&BulletList{}, &OrderedList{}, &TaskList{}, &ListItem{}, &TaskListItem{},
 }
 
 // TestEveryBlockNodeHasPosition parses one document holding each
@@ -269,8 +269,8 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 	// block quote or list item), inside a block quote and inside a list item.
 	type seen struct{ top, quote, item bool }
 	where := map[Tag]*seen{}
-	var walk func(n treeNode, inQuote, inItem bool)
-	walk = func(n treeNode, inQuote, inItem bool) {
+	var walk func(n Node, inQuote, inItem bool)
+	walk = func(n Node, inQuote, inItem bool) {
 		s := where[n.Tag()]
 		if s == nil {
 			s = &seen{}
@@ -281,7 +281,7 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 		s.item = s.item || inItem
 		pos := n.header().Pos
 		switch n.(type) {
-		case *treeTerm, *treeDefinition:
+		case *Term, *Definition:
 			if pos != nil {
 				t.Errorf("%s has a position %+v; zjot prints none", n.Tag(), *pos)
 			}
@@ -292,8 +292,8 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 				}
 			}
 		}
-		_, quote := n.(*treeBlockQuote)
-		_, item := n.(*treeListItem)
+		_, quote := n.(*BlockQuote)
+		_, item := n.(*ListItem)
 		for _, c := range childrenOf(n) {
 			walk(c, inQuote || quote, inItem || item)
 		}
@@ -320,7 +320,7 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 		}
 	}
 
-	treeWalk(Parse([]byte(input)), func(n treeNode) WalkStatus {
+	Walk(Parse([]byte(input)), func(n Node) WalkStatus {
 		if pos := n.header().Pos; pos != nil {
 			t.Errorf("without WithSourcePos, %s has a position %+v", n.Tag(), *pos)
 		}
@@ -487,8 +487,8 @@ func TestOrderedListNode(t *testing.T) {
 		{"IV. x\n", "I.", "IV"},
 	}
 	for _, c := range cases {
-		first := Parse([]byte(c.input)).(*treeSection).Children[0]
-		list, ok := first.(*treeOrderedList)
+		first := Parse([]byte(c.input)).(*Section).Children[0]
+		list, ok := first.(*OrderedList)
 		if !ok || list.Style != c.style || list.Marker != c.text || len(list.Attrs) != 0 {
 			t.Errorf("%q: got %s %+v; want ordered_list style=%q marker=%q, no attrs",
 				c.input, first.Tag(), first, c.style, c.text)
@@ -510,10 +510,10 @@ func TestFootnoteDefinitionsInTree(t *testing.T) {
 	var got []string
 	for _, b := range childrenOf(doc) {
 		switch b := b.(type) {
-		case *treeFootnote:
-			got = append(got, "footnote "+b.Label+"="+b.Children[0].(*treePara).Children[0].(*treeStr).Text)
-		case *treePara:
-			got = append(got, "para ref="+b.Children[1].(*treeFootnoteReference).Label)
+		case *Footnote:
+			got = append(got, "footnote "+b.Label+"="+b.Children[0].(*Para).Children[0].(*Str).Text)
+		case *Para:
+			got = append(got, "para ref="+b.Children[1].(*FootnoteReference).Label)
 		default:
 			got = append(got, string(b.Tag()))
 		}

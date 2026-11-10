@@ -4,15 +4,15 @@ import "strconv"
 
 // ASTText renders doc in djot.js's indented AST text format, the format the
 // corpus compares against for its "a" cases.
-func ASTText(doc treeNode) []byte {
+func ASTText(doc Node) []byte {
 	return appendAST(nil, doc, 0, true)
 }
 
-func appendAST(out []byte, n treeNode, indent int, isRoot bool) []byte {
+func appendAST(out []byte, n Node, indent int, isRoot bool) []byte {
 	for i := 0; i < indent; i++ {
 		out = append(out, ' ')
 	}
-	if _, ok := n.(*treeSection); isRoot && ok {
+	if _, ok := n.(*Section); isRoot && ok {
 		out = append(out, "doc"...)
 	} else {
 		out = append(out, n.Tag()...)
@@ -30,45 +30,45 @@ func appendAST(out []byte, n treeNode, indent int, isRoot bool) []byte {
 	// the kind's own attributes.
 	var lang string
 	switch n := n.(type) {
-	case *treeSymb:
+	case *Symb:
 		if n.Alias != "" {
 			out = append(out, " alias="...)
 			out = appendQuoted(out, n.Alias)
 		}
-	case *treeStr:
+	case *Str:
 		out = appendText(out, n.Text)
-	case *treeVerbatim:
+	case *Verbatim:
 		out = appendText(out, n.Text)
-	case *treeRawInline:
-		out = appendText(out, n.Text)
-		lang = n.Format
-	case *treeRawBlock:
+	case *RawInline:
 		out = appendText(out, n.Text)
 		lang = n.Format
-	case *treeCodeBlock:
+	case *RawBlock:
+		out = appendText(out, n.Text)
+		lang = n.Format
+	case *CodeBlock:
 		out = appendText(out, n.Text)
 		lang = n.Lang
-	case *treeFootnoteReference:
+	case *FootnoteReference:
 		out = appendText(out, n.Label)
-	case *treeHeading:
+	case *Heading:
 		out = append(out, " level="...)
 		out = strconv.AppendInt(out, int64(n.Level), 10)
-	case *treeFootnote:
+	case *Footnote:
 		out = append(out, " label="...)
 		out = appendQuoted(out, n.Label)
-	case *treeBulletList:
+	case *BulletList:
 		out = appendListAttrs(out, n.Tight, n.Style)
-	case *treeOrderedList:
+	case *OrderedList:
 		out = appendListAttrs(out, n.Tight, n.Style)
-	case *treeTaskListItem:
+	case *TaskListItem:
 		out = appendBool(out, " checked=", n.Checked)
-	case *treeLink:
+	case *Link:
 		out = appendLinkAttrs(out, n.Destination, n.Reference)
-	case *treeImage:
+	case *Image:
 		out = appendLinkAttrs(out, n.Destination, n.Reference)
-	case *treeRow:
+	case *Row:
 		out = appendBool(out, " head=", n.Head)
-	case *treeCell:
+	case *Cell:
 		out = appendBool(out, " head=", n.Head)
 		align := n.Align
 		if align == "" {

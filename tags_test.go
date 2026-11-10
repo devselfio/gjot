@@ -23,7 +23,7 @@ func TestEveryTagIsParsed(t *testing.T) {
 		t.Fatal("no testdata/spec/*.test files found")
 	}
 	seen := map[Tag]bool{}
-	visit := func(n treeNode) WalkStatus {
+	visit := func(n Node) WalkStatus {
 		seen[n.Tag()] = true
 		return WalkContinue
 	}
@@ -33,7 +33,7 @@ func TestEveryTagIsParsed(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, c := range parseSpecFile(string(content)) {
-			treeWalk(Parse([]byte(c.input)), visit)
+			Walk(Parse([]byte(c.input)), visit)
 		}
 	}
 	var missing, undeclared []string

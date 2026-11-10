@@ -357,14 +357,14 @@ func TestWriterTextEscapes(t *testing.T) {
 func TestWriterEscapesMarkupInText(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		para []treeNode
+		para []Node
 	}{
-		{"markup-in-text", []treeNode{&treeStr{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
-		{"own-closer-inside-insert", []treeNode{&treeInsert{Children: []treeNode{&treeStr{Text: "a +} b"}}}}},
-		{"own-closer-inside-braced-emph", []treeNode{&treeEmph{Children: []treeNode{&treeStr{Text: " a _} b"}}}}},
+		{"markup-in-text", []Node{&Str{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
+		{"own-closer-inside-insert", []Node{&Insert{Children: []Node{&Str{Text: "a +} b"}}}}},
+		{"own-closer-inside-braced-emph", []Node{&Emph{Children: []Node{&Str{Text: " a _} b"}}}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			doc := &treeSection{Children: []treeNode{&treePara{Children: c.para}}}
+			doc := &Section{Children: []Node{&Para{Children: c.para}}}
 			djot := Djot(doc)
 			got, err := HTML(Parse(djot))
 			if err != nil {
@@ -522,9 +522,9 @@ func TestWriterRegistersIDs(t *testing.T) {
 // (a tree built by hand: the id a later heading of the same text would get)
 // is written with the id explicit, so its HTML stands.
 func TestWriterExplicitIDFallback(t *testing.T) {
-	doc := &treeSection{Children: []treeNode{
-		&treeSection{treeHeader: treeHeader{ID: "a-1"}, Level: 1, AutoID: true, Children: []treeNode{&treeHeading{Level: 1, Children: []treeNode{&treeStr{Text: "a"}}}}},
-		&treeSection{treeHeader: treeHeader{ID: "a"}, Level: 1, AutoID: true, Children: []treeNode{&treeHeading{Level: 1, Children: []treeNode{&treeStr{Text: "a"}}}}},
+	doc := &Section{Children: []Node{
+		&Section{Header: Header{ID: "a-1"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
+		&Section{Header: Header{ID: "a"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
 	}}
 	djot := string(Djot(doc))
 	want := "# {#a}a\n\n{#a}\n# a\n"

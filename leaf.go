@@ -574,7 +574,7 @@ func getListStart(markerText string, s listStyle) int {
 // orderedStart is the number an OrderedList node starts at: its first
 // marker's text (Marker) read in its style (Style); 1 when the node has
 // neither.
-func orderedStart(n *treeOrderedList) int {
+func orderedStart(n *OrderedList) int {
 	s, _, ok := parseStyleString(n.Style)
 	if !ok {
 		return 1

@@ -59,9 +59,9 @@ func (m lineMap) rangeOf(start, end int) *Range {
 // and its text final. Every other inline node had its position set as it
 // was made (inlineParser.at), a literal text node's (a smart quote's)
 // included.
-func applyStrPositions(nodes []treeNode, m *lineMap) {
+func applyStrPositions(nodes []Node, m *lineMap) {
 	for _, n := range nodes {
-		if s, ok := n.(*treeStr); ok {
+		if s, ok := n.(*Str); ok {
 			if s.off > 0 {
 				s.Pos = m.rangeOf(s.off-1, s.off-1+len(s.Text))
 			}

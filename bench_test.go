@@ -55,9 +55,9 @@ func readBenchPage(tb testing.TB) []byte {
 }
 
 // countNodes is the size of the tree under n, n included.
-func countNodes(n treeNode) int {
+func countNodes(n Node) int {
 	count := 0
-	treeWalk(n, func(treeNode) WalkStatus {
+	Walk(n, func(Node) WalkStatus {
 		count++
 		return WalkContinue
 	})
@@ -65,8 +65,8 @@ func countNodes(n treeNode) int {
 }
 
 // parseAll parses every input and returns the trees and their node count.
-func parseAll(inputs [][]byte, opts ...ParseOption) ([]treeNode, int) {
-	trees := make([]treeNode, len(inputs))
+func parseAll(inputs [][]byte, opts ...ParseOption) ([]Node, int) {
+	trees := make([]Node, len(inputs))
 	nodes := 0
 	for i, in := range inputs {
 		trees[i] = Parse(in, opts...)
@@ -139,7 +139,7 @@ func benchPaths(b *testing.B, inputs [][]byte) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if _, err := treeUnmarshalNode(data); err != nil {
+				if _, err := UnmarshalNode(data); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -242,15 +242,15 @@ func TestBenchPageMix(t *testing.T) {
 	}
 	seen := map[Tag]bool{}
 	attrs := false
-	treeWalk(doc, func(n treeNode) WalkStatus {
+	Walk(doc, func(n Node) WalkStatus {
 		seen[n.Tag()] = true
 		if len(n.header().Attrs) > 0 {
 			attrs = true
 		}
 		return WalkContinue
 	})
-	for _, kind := range []treeNode{&treeHeading{}, &treePara{}, &treeBulletList{}, &treeOrderedList{}, &treeBlockQuote{}, &treeTable{},
-		&treeCodeBlock{}, &treeFootnote{}, &treeFootnoteReference{}, &treeLink{}, &treeEmph{}, &treeStrong{}, &treeVerbatim{}, &treeSpan{}} {
+	for _, kind := range []Node{&Heading{}, &Para{}, &BulletList{}, &OrderedList{}, &BlockQuote{}, &Table{},
+		&CodeBlock{}, &Footnote{}, &FootnoteReference{}, &Link{}, &Emph{}, &Strong{}, &Verbatim{}, &Span{}} {
 		if !seen[kind.Tag()] {
 			t.Errorf("page has no %s node", kind.Tag())
 		}
@@ -264,58 +264,58 @@ func TestBenchPageMix(t *testing.T) {
 // common kind is 100 bytes or more.
 func TestNodeSize(t *testing.T) {
 	sizes := []struct {
-		kind treeNode
+		kind Node
 		size uintptr
 	}{
-		{&treeSection{}, unsafe.Sizeof(treeSection{})},
-		{&treeHeading{}, unsafe.Sizeof(treeHeading{})},
-		{&treePara{}, unsafe.Sizeof(treePara{})},
-		{&treeThematicBreak{}, unsafe.Sizeof(treeThematicBreak{})},
-		{&treeCodeBlock{}, unsafe.Sizeof(treeCodeBlock{})},
-		{&treeRawBlock{}, unsafe.Sizeof(treeRawBlock{})},
-		{&treeBlockQuote{}, unsafe.Sizeof(treeBlockQuote{})},
-		{&treeDiv{}, unsafe.Sizeof(treeDiv{})},
-		{&treeBulletList{}, unsafe.Sizeof(treeBulletList{})},
-		{&treeTaskList{}, unsafe.Sizeof(treeTaskList{})},
-		{&treeOrderedList{}, unsafe.Sizeof(treeOrderedList{})},
-		{&treeDefinitionList{}, unsafe.Sizeof(treeDefinitionList{})},
-		{&treeListItem{}, unsafe.Sizeof(treeListItem{})},
-		{&treeTaskListItem{}, unsafe.Sizeof(treeTaskListItem{})},
-		{&treeDefinitionListItem{}, unsafe.Sizeof(treeDefinitionListItem{})},
-		{&treeTerm{}, unsafe.Sizeof(treeTerm{})},
-		{&treeDefinition{}, unsafe.Sizeof(treeDefinition{})},
-		{&treeTable{}, unsafe.Sizeof(treeTable{})},
-		{&treeCaption{}, unsafe.Sizeof(treeCaption{})},
-		{&treeRow{}, unsafe.Sizeof(treeRow{})},
-		{&treeCell{}, unsafe.Sizeof(treeCell{})},
-		{&treeFootnote{}, unsafe.Sizeof(treeFootnote{})},
-		{&treeStr{}, unsafe.Sizeof(treeStr{})},
-		{&treeSoftBreak{}, unsafe.Sizeof(treeSoftBreak{})},
-		{&treeHardBreak{}, unsafe.Sizeof(treeHardBreak{})},
-		{&treeNonBreakingSpace{}, unsafe.Sizeof(treeNonBreakingSpace{})},
-		{&treeEmph{}, unsafe.Sizeof(treeEmph{})},
-		{&treeStrong{}, unsafe.Sizeof(treeStrong{})},
-		{&treeSpan{}, unsafe.Sizeof(treeSpan{})},
-		{&treeMark{}, unsafe.Sizeof(treeMark{})},
-		{&treeSuperscript{}, unsafe.Sizeof(treeSuperscript{})},
-		{&treeSubscript{}, unsafe.Sizeof(treeSubscript{})},
-		{&treeInsert{}, unsafe.Sizeof(treeInsert{})},
-		{&treeDelete{}, unsafe.Sizeof(treeDelete{})},
-		{&treeDoubleQuoted{}, unsafe.Sizeof(treeDoubleQuoted{})},
-		{&treeSingleQuoted{}, unsafe.Sizeof(treeSingleQuoted{})},
-		{&treeVerbatim{}, unsafe.Sizeof(treeVerbatim{})},
-		{&treeInlineMath{}, unsafe.Sizeof(treeInlineMath{})},
-		{&treeDisplayMath{}, unsafe.Sizeof(treeDisplayMath{})},
-		{&treeRawInline{}, unsafe.Sizeof(treeRawInline{})},
-		{&treeURL{}, unsafe.Sizeof(treeURL{})},
-		{&treeEmail{}, unsafe.Sizeof(treeEmail{})},
-		{&treeFootnoteReference{}, unsafe.Sizeof(treeFootnoteReference{})},
-		{&treeSymb{}, unsafe.Sizeof(treeSymb{})},
-		{&treeLink{}, unsafe.Sizeof(treeLink{})},
-		{&treeImage{}, unsafe.Sizeof(treeImage{})},
-		{&treeEllipsis{}, unsafe.Sizeof(treeEllipsis{})},
-		{&treeEmDash{}, unsafe.Sizeof(treeEmDash{})},
-		{&treeEnDash{}, unsafe.Sizeof(treeEnDash{})},
+		{&Section{}, unsafe.Sizeof(Section{})},
+		{&Heading{}, unsafe.Sizeof(Heading{})},
+		{&Para{}, unsafe.Sizeof(Para{})},
+		{&ThematicBreak{}, unsafe.Sizeof(ThematicBreak{})},
+		{&CodeBlock{}, unsafe.Sizeof(CodeBlock{})},
+		{&RawBlock{}, unsafe.Sizeof(RawBlock{})},
+		{&BlockQuote{}, unsafe.Sizeof(BlockQuote{})},
+		{&Div{}, unsafe.Sizeof(Div{})},
+		{&BulletList{}, unsafe.Sizeof(BulletList{})},
+		{&TaskList{}, unsafe.Sizeof(TaskList{})},
+		{&OrderedList{}, unsafe.Sizeof(OrderedList{})},
+		{&DefinitionList{}, unsafe.Sizeof(DefinitionList{})},
+		{&ListItem{}, unsafe.Sizeof(ListItem{})},
+		{&TaskListItem{}, unsafe.Sizeof(TaskListItem{})},
+		{&DefinitionListItem{}, unsafe.Sizeof(DefinitionListItem{})},
+		{&Term{}, unsafe.Sizeof(Term{})},
+		{&Definition{}, unsafe.Sizeof(Definition{})},
+		{&Table{}, unsafe.Sizeof(Table{})},
+		{&Caption{}, unsafe.Sizeof(Caption{})},
+		{&Row{}, unsafe.Sizeof(Row{})},
+		{&Cell{}, unsafe.Sizeof(Cell{})},
+		{&Footnote{}, unsafe.Sizeof(Footnote{})},
+		{&Str{}, unsafe.Sizeof(Str{})},
+		{&SoftBreak{}, unsafe.Sizeof(SoftBreak{})},
+		{&HardBreak{}, unsafe.Sizeof(HardBreak{})},
+		{&NonBreakingSpace{}, unsafe.Sizeof(NonBreakingSpace{})},
+		{&Emph{}, unsafe.Sizeof(Emph{})},
+		{&Strong{}, unsafe.Sizeof(Strong{})},
+		{&Span{}, unsafe.Sizeof(Span{})},
+		{&Mark{}, unsafe.Sizeof(Mark{})},
+		{&Superscript{}, unsafe.Sizeof(Superscript{})},
+		{&Subscript{}, unsafe.Sizeof(Subscript{})},
+		{&Insert{}, unsafe.Sizeof(Insert{})},
+		{&Delete{}, unsafe.Sizeof(Delete{})},
+		{&DoubleQuoted{}, unsafe.Sizeof(DoubleQuoted{})},
+		{&SingleQuoted{}, unsafe.Sizeof(SingleQuoted{})},
+		{&Verbatim{}, unsafe.Sizeof(Verbatim{})},
+		{&InlineMath{}, unsafe.Sizeof(InlineMath{})},
+		{&DisplayMath{}, unsafe.Sizeof(DisplayMath{})},
+		{&RawInline{}, unsafe.Sizeof(RawInline{})},
+		{&URL{}, unsafe.Sizeof(URL{})},
+		{&Email{}, unsafe.Sizeof(Email{})},
+		{&FootnoteReference{}, unsafe.Sizeof(FootnoteReference{})},
+		{&Symb{}, unsafe.Sizeof(Symb{})},
+		{&Link{}, unsafe.Sizeof(Link{})},
+		{&Image{}, unsafe.Sizeof(Image{})},
+		{&Ellipsis{}, unsafe.Sizeof(Ellipsis{})},
+		{&EmDash{}, unsafe.Sizeof(EmDash{})},
+		{&EnDash{}, unsafe.Sizeof(EnDash{})},
 	}
 	if len(sizes) != len(nodeKinds) {
 		t.Errorf("the table lists %d kinds, nodeKinds %d", len(sizes), len(nodeKinds))

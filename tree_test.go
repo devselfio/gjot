@@ -39,14 +39,14 @@ func TestTreeJSONIdentical(t *testing.T) {
 			if direct := appendJSON(nil, doc); !bytes.Equal(direct, want) {
 				t.Errorf("input %d %q (positions=%v): json.Marshal and appendJSON differ\n got %s\nwant %s", i, in, len(opts) > 0, direct, want)
 			}
-			back, err := treeUnmarshalNode(want)
+			back, err := UnmarshalNode(want)
 			if err != nil {
-				t.Fatalf("input %d: treeUnmarshalNode: %v", i, err)
+				t.Fatalf("input %d: UnmarshalNode: %v", i, err)
 			}
 			if again := appendJSON(nil, back); !bytes.Equal(again, want) {
 				t.Errorf("input %d %q (positions=%v): decoded tree encodes differently\n got %s\nwant %s", i, in, len(opts) > 0, again, want)
 			}
-			var sec treeSection
+			var sec Section
 			if err := json.Unmarshal(want, &sec); err != nil {
 				t.Fatalf("input %d: json.Unmarshal into a section: %v", i, err)
 			}
@@ -93,11 +93,11 @@ func TestUnmarshalNodeRejectsUnknownTag(t *testing.T) {
 		`{"tag":"para","children":[{"tag":"str","text":"a"},{"tag":"reference_definition"}]}`,
 		`{"tag":"para","children":[{"text":"a"}]}`,
 	} {
-		if n, err := treeUnmarshalNode([]byte(data)); err == nil {
+		if n, err := UnmarshalNode([]byte(data)); err == nil {
 			t.Errorf("%s: decoded to %#v, want an error", data, n)
 		}
 	}
-	var p treePara
+	var p Para
 	if err := json.Unmarshal([]byte(`{"tag":"str","text":"a"}`), &p); err == nil {
 		t.Error("a str decoded into a para")
 	}
@@ -111,19 +111,19 @@ func TestUnmarshalNodeIgnoresClasses(t *testing.T) {
 		`{"tag":"heading","children":[{"tag":"str","text":"A"}],"level":1,"id":"A","auto_id":true},` +
 		`{"tag":"para","children":[{"tag":"str","text":"b"}],"id":"p","classes":["x","y"],"attrs":[{"key":"class","value":"x y"}],"auto_id":true}` +
 		`]}`
-	n, err := treeUnmarshalNode([]byte(data))
+	n, err := UnmarshalNode([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sec, ok := n.(*treeSection)
+	sec, ok := n.(*Section)
 	if !ok || len(sec.Children) != 2 {
 		t.Fatalf("decoded %#v", n)
 	}
-	h, ok := sec.Children[0].(*treeHeading)
+	h, ok := sec.Children[0].(*Heading)
 	if !ok || !h.AutoID || h.Level != 1 || h.ID != "A" {
 		t.Errorf("heading decoded as %#v", sec.Children[0])
 	}
-	p, ok := sec.Children[1].(*treePara)
+	p, ok := sec.Children[1].(*Para)
 	if !ok || p.ID != "p" || !p.HasClass("y") || p.Attr("class") != "x y" || len(p.Children) != 1 {
 		t.Fatalf("para decoded as %#v", sec.Children[1])
 	}
@@ -133,31 +133,31 @@ func TestUnmarshalNodeIgnoresClasses(t *testing.T) {
 	}
 }
 
-// treeWalk visits a node before its children, children in order, and skips
+// Walk visits a node before its children, children in order, and skips
 // a subtree when told to.
 func TestWalkDocumentOrder(t *testing.T) {
 	dest := "u"
-	doc := &treeSection{Children: []treeNode{
-		&treeHeading{Level: 1, Children: []treeNode{&treeStr{Text: "T"}}},
-		&treePara{Children: []treeNode{
-			&treeStr{Text: "a"},
-			&treeEmph{Children: []treeNode{&treeStr{Text: "b"}, &treeSoftBreak{}}},
-			&treeLink{Destination: &dest, Children: []treeNode{&treeStr{Text: "c"}}},
-			&treeFootnoteReference{Label: "n"},
+	doc := &Section{Children: []Node{
+		&Heading{Level: 1, Children: []Node{&Str{Text: "T"}}},
+		&Para{Children: []Node{
+			&Str{Text: "a"},
+			&Emph{Children: []Node{&Str{Text: "b"}, &SoftBreak{}}},
+			&Link{Destination: &dest, Children: []Node{&Str{Text: "c"}}},
+			&FootnoteReference{Label: "n"},
 		}},
-		&treeBulletList{Children: []treeNode{
-			&treeListItem{Children: []treeNode{&treePara{Children: []treeNode{&treeStr{Text: "d"}}}}},
+		&BulletList{Children: []Node{
+			&ListItem{Children: []Node{&Para{Children: []Node{&Str{Text: "d"}}}}},
 		}},
-		&treeFootnote{Label: "n", Children: []treeNode{&treePara{Children: []treeNode{&treeStr{Text: "e"}}}}},
+		&Footnote{Label: "n", Children: []Node{&Para{Children: []Node{&Str{Text: "e"}}}}},
 	}}
-	name := func(n treeNode) string {
-		if s, ok := n.(*treeStr); ok {
+	name := func(n Node) string {
+		if s, ok := n.(*Str); ok {
 			return "str:" + s.Text
 		}
 		return string(n.Tag())
 	}
 	var got []string
-	treeWalk(doc, func(n treeNode) WalkStatus {
+	Walk(doc, func(n Node) WalkStatus {
 		got = append(got, name(n))
 		return WalkContinue
 	})
@@ -168,10 +168,10 @@ func TestWalkDocumentOrder(t *testing.T) {
 	}
 
 	got = nil
-	treeWalk(doc, func(n treeNode) WalkStatus {
+	Walk(doc, func(n Node) WalkStatus {
 		got = append(got, name(n))
 		switch n.(type) {
-		case *treeEmph, *treeBulletList:
+		case *Emph, *BulletList:
 			return WalkSkipChildren
 		}
 		return WalkContinue
@@ -194,7 +194,7 @@ func TestNodeKinds(t *testing.T) {
 		}
 	}
 	dest := "x"
-	for _, n := range []treeNode{&treeLink{}, &treeImage{}} {
+	for _, n := range []Node{&Link{}, &Image{}} {
 		d, r, _, ok := linkFields(n)
 		if !ok {
 			t.Fatalf("%s: linkFields not ok", n.Tag())
@@ -204,7 +204,7 @@ func TestNodeKinds(t *testing.T) {
 			t.Errorf("%s: linkFields did not write through: %s", n.Tag(), got)
 		}
 	}
-	if _, _, _, ok := linkFields(&treeURL{}); ok {
+	if _, _, _, ok := linkFields(&URL{}); ok {
 		t.Error("linkFields ok on a url")
 	}
 }

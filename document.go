@@ -23,7 +23,7 @@ type refDefinition struct {
 // footnoteDef is a footnote definition: its blocks, the block attributes
 // written before it, and its source range when positions are tracked.
 type footnoteDef struct {
-	blocks []treeNode
+	blocks []Node
 	attrs  *blockAttrs
 	pos    *Range
 }
@@ -68,7 +68,7 @@ func (t *ids) register(id string) {
 }
 
 // registerTree registers every explicit id in nodes' trees, in tree order.
-func (t *ids) registerTree(nodes []treeNode) {
+func (t *ids) registerTree(nodes []Node) {
 	for _, n := range nodes {
 		if id := n.header().ID; id != "" && !autoID(n) {
 			t.register(id)
@@ -143,7 +143,7 @@ func (t *ids) generate(text string) string {
 // its rendered text (stringContent, without footnote labels). The first
 // heading with a given text claims it as an implicit reference; a heading
 // whose text normalizes to nothing claims none.
-func (t *ids) heading(n *treeHeading, explicit string) {
+func (t *ids) heading(n *Heading, explicit string) {
 	text := stringContent(n.Children, false)
 	if explicit != "" {
 		n.ID, n.AutoID = explicit, false
@@ -175,11 +175,11 @@ func newDocument(trackPos bool) *document {
 // known: sections, then the footnote definitions after them, then
 // references. end is where a section still open at the end ends (zjot
 // Sections: the last block's end, or the input's when lines follow it).
-func (d *document) finish(blocks []treeNode, end *SourcePos) *treeSection {
+func (d *document) finish(blocks []Node, end *SourcePos) *Section {
 	blocks = d.sections(blocks, end)
 	blocks = append(blocks, d.footnotes()...)
 	d.resolve(blocks)
-	return &treeSection{Children: blocks}
+	return &Section{Children: blocks}
 }
 
 // footnotes is every footnote definition as a Footnote node, as djot.js's
@@ -187,11 +187,11 @@ func (d *document) finish(blocks []treeNode, end *SourcePos) *treeSection {
 // as children, its span, and the block attributes written before it; in
 // the order the labels first closed. The HTML renderer numbers the endnotes
 // from these where the body references them.
-func (d *document) footnotes() []treeNode {
-	var nodes []treeNode
+func (d *document) footnotes() []Node {
+	var nodes []Node
 	for _, label := range d.defs.footnoteLabels {
 		def := d.defs.footnoteDefs[label]
-		n := &treeFootnote{treeHeader: treeHeader{Pos: def.pos}, Label: label, Children: def.blocks}
+		n := &Footnote{Header: Header{Pos: def.pos}, Label: label, Children: def.blocks}
 		if def.attrs != nil {
 			applyBlockAttrs(n, *def.attrs)
 		}
@@ -206,13 +206,13 @@ func (d *document) footnotes() []treeNode {
 // move only when they hold a non-empty id; otherwise they stay on the
 // heading. A section runs from its heading's start to the end of the
 // heading that closes it, or to end.
-func (d *document) sections(blocks []treeNode, end *SourcePos) []treeNode {
+func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 	type open struct {
-		sec *treeSection
+		sec *Section
 	}
-	var result []treeNode
+	var result []Node
 	var stack []open
-	add := func(n treeNode) {
+	add := func(n Node) {
 		if len(stack) > 0 {
 			top := stack[len(stack)-1].sec
 			top.Children = append(top.Children, n)
@@ -229,7 +229,7 @@ func (d *document) sections(blocks []treeNode, end *SourcePos) []treeNode {
 		add(top)
 	}
 	for _, n := range blocks {
-		b, ok := n.(*treeHeading)
+		b, ok := n.(*Heading)
 		if !ok {
 			add(n)
 			continue
@@ -242,7 +242,7 @@ func (d *document) sections(blocks []treeNode, end *SourcePos) []treeNode {
 		for len(stack) > 0 && stack[len(stack)-1].sec.Level >= b.Level {
 			closeTop(closedAt)
 		}
-		sec := &treeSection{treeHeader: treeHeader{ID: b.ID}, Level: b.Level, AutoID: b.AutoID}
+		sec := &Section{Header: Header{ID: b.ID}, Level: b.Level, AutoID: b.AutoID}
 		heading := *b
 		heading.ID, heading.AutoID = "", false
 		// A written non-empty id moves the heading's attributes to the
@@ -254,7 +254,7 @@ func (d *document) sections(blocks []treeNode, end *SourcePos) []treeNode {
 		if b.Pos != nil {
 			sec.Pos = &Range{Start: b.Pos.Start, End: b.Pos.End}
 		}
-		sec.Children = []treeNode{&heading}
+		sec.Children = []Node{&heading}
 		stack = append(stack, open{sec})
 	}
 	for len(stack) > 0 {
@@ -265,7 +265,7 @@ func (d *document) sections(blocks []treeNode, end *SourcePos) []treeNode {
 
 // resolve fills in reference links and images from the definitions, else
 // from a heading's implicit reference. Nodes are updated in place.
-func (d *document) resolve(nodes []treeNode) {
+func (d *document) resolve(nodes []Node) {
 	for _, n := range nodes {
 		if dest, ref, children, ok := linkFields(n); ok && *dest == nil {
 			raw := *ref

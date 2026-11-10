@@ -28,7 +28,7 @@ func TestJSONRoundTrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
-				back, err := treeUnmarshalNode(data)
+				back, err := UnmarshalNode(data)
 				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
@@ -63,7 +63,7 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		back, err := treeUnmarshalNode(data)
+		back, err := UnmarshalNode(data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,10 +87,10 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 
 // checkSourceOnlyOnQuotes fails unless every text node with a Source holds
 // one smart-quote glyph written as ' or ". (Only a text node has a Source.)
-func checkSourceOnlyOnQuotes(t *testing.T, where string, doc treeNode) {
+func checkSourceOnlyOnQuotes(t *testing.T, where string, doc Node) {
 	t.Helper()
-	treeWalk(doc, func(n treeNode) WalkStatus {
-		if n, ok := n.(*treeStr); ok && n.Source != "" {
+	Walk(doc, func(n Node) WalkStatus {
+		if n, ok := n.(*Str); ok && n.Source != "" {
 			single := n.Source == "'" && (n.Text == "‘" || n.Text == "’")
 			double := n.Source == "\"" && (n.Text == "“" || n.Text == "”")
 			if !single && !double {

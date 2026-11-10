@@ -36,53 +36,53 @@ type jsonNode struct {
 
 // wireFields fills w with n's own fields (its children aside) as they go on
 // the wire.
-func wireFields(w *jsonNode, n treeNode) {
+func wireFields(w *jsonNode, n Node) {
 	h := n.header()
 	w.Tag, w.ID, w.Attrs, w.Pos = n.Tag(), h.ID, h.Attrs, h.Pos
 	switch n := n.(type) {
-	case *treeSection:
+	case *Section:
 		w.Level, w.AutoID = n.Level, n.AutoID
-	case *treeHeading:
+	case *Heading:
 		w.Level, w.AutoID = n.Level, n.AutoID
-	case *treeCodeBlock:
+	case *CodeBlock:
 		w.Lang, w.Text = n.Lang, n.Text
-	case *treeRawBlock:
+	case *RawBlock:
 		w.Lang, w.Text = n.Format, n.Text
-	case *treeBulletList:
+	case *BulletList:
 		w.Style, w.Tight = n.Style, n.Tight
-	case *treeTaskList:
+	case *TaskList:
 		w.Style, w.Tight = n.Style, n.Tight
-	case *treeOrderedList:
+	case *OrderedList:
 		w.Style, w.Text, w.Tight = n.Style, n.Marker, n.Tight
-	case *treeTaskListItem:
+	case *TaskListItem:
 		w.Checked = &n.Checked
-	case *treeRow:
+	case *Row:
 		w.Head = n.Head
-	case *treeCell:
+	case *Cell:
 		w.Head, w.Align = n.Head, n.Align
-	case *treeFootnote:
+	case *Footnote:
 		w.Text = n.Label
-	case *treeStr:
+	case *Str:
 		w.Text, w.Source = n.Text, n.Source
-	case *treeVerbatim:
+	case *Verbatim:
 		w.Text = n.Text
-	case *treeInlineMath:
+	case *InlineMath:
 		w.Text = n.Text
-	case *treeDisplayMath:
+	case *DisplayMath:
 		w.Text = n.Text
-	case *treeRawInline:
+	case *RawInline:
 		w.Lang, w.Text = n.Format, n.Text
-	case *treeURL:
+	case *URL:
 		w.Text = n.Text
-	case *treeEmail:
+	case *Email:
 		w.Text = n.Text
-	case *treeFootnoteReference:
+	case *FootnoteReference:
 		w.Text = n.Label
-	case *treeSymb:
+	case *Symb:
 		w.Text = n.Alias
-	case *treeLink:
+	case *Link:
 		w.Destination, w.Reference = n.Destination, n.Reference
-	case *treeImage:
+	case *Image:
 		w.Destination, w.Reference = n.Destination, n.Reference
 	}
 }
@@ -90,7 +90,7 @@ func wireFields(w *jsonNode, n treeNode) {
 // appendJSON appends n's JSON form: jsonNode's fields in its order with its
 // omitempty rules, children recursed into here rather than through nested
 // MarshalJSON calls, which encoding/json would re-validate at every level.
-func appendJSON(dst []byte, n treeNode) []byte {
+func appendJSON(dst []byte, n Node) []byte {
 	var w jsonNode
 	wireFields(&w, n)
 	dst = append(dst, `{"tag":`...)
@@ -245,12 +245,12 @@ func appendJSONString(dst []byte, s string) []byte {
 	return append(dst, '"')
 }
 
-// treeUnmarshalNode decodes one node of any kind from its JSON form,
+// UnmarshalNode decodes one node of any kind from its JSON form,
 // switching on "tag"; an unknown or missing tag is an error. A document
 // marshalled by an earlier gjot decodes: a key no kind has (its "classes")
 // is ignored, as is a field the node's kind does not carry ("auto_id" is
 // read on headings and sections only).
-func treeUnmarshalNode(data []byte) (treeNode, error) {
+func UnmarshalNode(data []byte) (Node, error) {
 	var w jsonNode
 	if err := json.Unmarshal(data, &w); err != nil {
 		return nil, err
@@ -262,7 +262,7 @@ var errNoTag = errors.New(`gjot: JSON node has no "tag"`)
 
 // fromWire builds the kind w's tag names and fills its fields from w,
 // recursing through w's children.
-func fromWire(w *jsonNode) (treeNode, error) {
+func fromWire(w *jsonNode) (Node, error) {
 	if w.Tag == "" {
 		return nil, errNoTag
 	}
@@ -273,9 +273,9 @@ func fromWire(w *jsonNode) (treeNode, error) {
 	n := mk()
 	h := n.header()
 	h.ID, h.Attrs, h.Pos = w.ID, w.Attrs, w.Pos
-	var children []treeNode
+	var children []Node
 	if len(w.Children) > 0 {
-		children = make([]treeNode, len(w.Children))
+		children = make([]Node, len(w.Children))
 		for i := range w.Children {
 			c, err := fromWire(&w.Children[i])
 			if err != nil {
@@ -285,89 +285,89 @@ func fromWire(w *jsonNode) (treeNode, error) {
 		}
 	}
 	switch n := n.(type) {
-	case *treeSection:
+	case *Section:
 		n.Level, n.AutoID, n.Children = w.Level, w.AutoID, children
-	case *treeHeading:
+	case *Heading:
 		n.Level, n.AutoID, n.Children = w.Level, w.AutoID, children
-	case *treePara:
+	case *Para:
 		n.Children = children
-	case *treeCodeBlock:
+	case *CodeBlock:
 		n.Lang, n.Text = w.Lang, w.Text
-	case *treeRawBlock:
+	case *RawBlock:
 		n.Format, n.Text = w.Lang, w.Text
-	case *treeBlockQuote:
+	case *BlockQuote:
 		n.Children = children
-	case *treeDiv:
+	case *Div:
 		n.Children = children
-	case *treeBulletList:
+	case *BulletList:
 		n.Style, n.Tight, n.Children = w.Style, w.Tight, children
-	case *treeTaskList:
+	case *TaskList:
 		n.Style, n.Tight, n.Children = w.Style, w.Tight, children
-	case *treeOrderedList:
+	case *OrderedList:
 		n.Style, n.Marker, n.Tight, n.Children = w.Style, w.Text, w.Tight, children
-	case *treeDefinitionList:
+	case *DefinitionList:
 		n.Children = children
-	case *treeListItem:
+	case *ListItem:
 		n.Children = children
-	case *treeTaskListItem:
+	case *TaskListItem:
 		n.Checked, n.Children = w.Checked != nil && *w.Checked, children
-	case *treeDefinitionListItem:
+	case *DefinitionListItem:
 		n.Children = children
-	case *treeTerm:
+	case *Term:
 		n.Children = children
-	case *treeDefinition:
+	case *Definition:
 		n.Children = children
-	case *treeTable:
+	case *Table:
 		n.Children = children
-	case *treeCaption:
+	case *Caption:
 		n.Children = children
-	case *treeRow:
+	case *Row:
 		n.Head, n.Children = w.Head, children
-	case *treeCell:
+	case *Cell:
 		n.Head, n.Align, n.Children = w.Head, w.Align, children
-	case *treeFootnote:
+	case *Footnote:
 		n.Label, n.Children = w.Text, children
-	case *treeStr:
+	case *Str:
 		n.Text, n.Source = w.Text, w.Source
-	case *treeEmph:
+	case *Emph:
 		n.Children = children
-	case *treeStrong:
+	case *Strong:
 		n.Children = children
-	case *treeSpan:
+	case *Span:
 		n.Children = children
-	case *treeMark:
+	case *Mark:
 		n.Children = children
-	case *treeSuperscript:
+	case *Superscript:
 		n.Children = children
-	case *treeSubscript:
+	case *Subscript:
 		n.Children = children
-	case *treeInsert:
+	case *Insert:
 		n.Children = children
-	case *treeDelete:
+	case *Delete:
 		n.Children = children
-	case *treeDoubleQuoted:
+	case *DoubleQuoted:
 		n.Children = children
-	case *treeSingleQuoted:
+	case *SingleQuoted:
 		n.Children = children
-	case *treeVerbatim:
+	case *Verbatim:
 		n.Text = w.Text
-	case *treeInlineMath:
+	case *InlineMath:
 		n.Text = w.Text
-	case *treeDisplayMath:
+	case *DisplayMath:
 		n.Text = w.Text
-	case *treeRawInline:
+	case *RawInline:
 		n.Format, n.Text = w.Lang, w.Text
-	case *treeURL:
+	case *URL:
 		n.Text = w.Text
-	case *treeEmail:
+	case *Email:
 		n.Text = w.Text
-	case *treeFootnoteReference:
+	case *FootnoteReference:
 		n.Label = w.Text
-	case *treeSymb:
+	case *Symb:
 		n.Alias = w.Text
-	case *treeLink:
+	case *Link:
 		n.Destination, n.Reference, n.Children = w.Destination, w.Reference, children
-	case *treeImage:
+	case *Image:
 		n.Destination, n.Reference, n.Children = w.Destination, w.Reference, children
 	}
 	return n, nil
@@ -376,9 +376,9 @@ func fromWire(w *jsonNode) (treeNode, error) {
 // unmarshalKind decodes data into *p, failing if it holds another kind.
 func unmarshalKind[T any, P interface {
 	*T
-	treeNode
+	Node
 }](p P, data []byte) error {
-	m, err := treeUnmarshalNode(data)
+	m, err := UnmarshalNode(data)
 	if err != nil {
 		return err
 	}
@@ -391,152 +391,152 @@ func unmarshalKind[T any, P interface {
 }
 
 // Each kind marshals through appendJSON and unmarshals through
-// treeUnmarshalNode, so encoding/json reads and writes the wire form whether
+// UnmarshalNode, so encoding/json reads and writes the wire form whether
 // it holds a kind or the interface.
 
-func (n *treeSection) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSection) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Section) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Section) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeHeading) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeHeading) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Heading) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Heading) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treePara) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treePara) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Para) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Para) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeThematicBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeThematicBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *ThematicBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *ThematicBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeCodeBlock) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeCodeBlock) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *CodeBlock) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *CodeBlock) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeRawBlock) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeRawBlock) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *RawBlock) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *RawBlock) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeBlockQuote) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeBlockQuote) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *BlockQuote) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *BlockQuote) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDiv) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDiv) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Div) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Div) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeBulletList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeBulletList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *BulletList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *BulletList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeTaskList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeTaskList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *TaskList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *TaskList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeOrderedList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeOrderedList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *OrderedList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *OrderedList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDefinitionList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDefinitionList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *DefinitionList) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *DefinitionList) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *ListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *ListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeTaskListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeTaskListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *TaskListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *TaskListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDefinitionListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDefinitionListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *DefinitionListItem) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *DefinitionListItem) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeTerm) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeTerm) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Term) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Term) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDefinition) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDefinition) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Definition) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Definition) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeTable) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeTable) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Table) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Table) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeCaption) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeCaption) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Caption) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Caption) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeRow) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeRow) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Row) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Row) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeCell) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeCell) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Cell) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Cell) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeFootnote) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeFootnote) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Footnote) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Footnote) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeStr) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeStr) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Str) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Str) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSoftBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSoftBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *SoftBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *SoftBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeHardBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeHardBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *HardBreak) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *HardBreak) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeNonBreakingSpace) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeNonBreakingSpace) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *NonBreakingSpace) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *NonBreakingSpace) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeEmph) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeEmph) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Emph) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Emph) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeStrong) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeStrong) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Strong) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Strong) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSpan) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSpan) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Span) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Span) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeMark) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeMark) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Mark) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Mark) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSuperscript) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSuperscript) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Superscript) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Superscript) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSubscript) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSubscript) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Subscript) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Subscript) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeInsert) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeInsert) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Insert) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Insert) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDelete) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDelete) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Delete) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Delete) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDoubleQuoted) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDoubleQuoted) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *DoubleQuoted) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *DoubleQuoted) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSingleQuoted) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSingleQuoted) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *SingleQuoted) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *SingleQuoted) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeVerbatim) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeVerbatim) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Verbatim) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Verbatim) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeInlineMath) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeInlineMath) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *InlineMath) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *InlineMath) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeDisplayMath) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeDisplayMath) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *DisplayMath) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *DisplayMath) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeRawInline) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeRawInline) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *RawInline) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *RawInline) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeURL) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeURL) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *URL) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *URL) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeEmail) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeEmail) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Email) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Email) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeFootnoteReference) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeFootnoteReference) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *FootnoteReference) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *FootnoteReference) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeSymb) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeSymb) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Symb) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Symb) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeLink) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeLink) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Link) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Link) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeImage) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeImage) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Image) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Image) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeEllipsis) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeEllipsis) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *Ellipsis) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *Ellipsis) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeEmDash) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeEmDash) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *EmDash) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *EmDash) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
 
-func (n *treeEnDash) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
-func (n *treeEnDash) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }
+func (n *EnDash) MarshalJSON() ([]byte, error)    { return appendJSON(nil, n), nil }
+func (n *EnDash) UnmarshalJSON(data []byte) error { return unmarshalKind(n, data) }

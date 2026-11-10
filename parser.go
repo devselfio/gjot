@@ -256,13 +256,13 @@ type containerData struct {
 	// table: the alignments the last separator row gave, and the row on
 	// the line before, which a separator row makes a header row.
 	aligns    []CellAlign
-	rowBefore *treeRow
+	rowBefore *Row
 }
 
 type container struct {
 	kind     kind
 	start    SourcePos
-	children []treeNode
+	children []Node
 	// pendingAttrs are block attributes waiting for this container's next
 	// child block.
 	pendingAttrs *blockAttrs
@@ -283,7 +283,7 @@ type stackParser struct {
 	// pendingAttrs are block attributes waiting for the next top-level
 	// block.
 	pendingAttrs *blockAttrs
-	blocks       []treeNode
+	blocks       []Node
 	// The open leaf's lines; the leaf is always the tip.
 	leafSlices      []string
 	leafStarts      []leafStart
@@ -307,7 +307,7 @@ type stackParser struct {
 // parseStack parses input with the container stack into the whole document
 // tree: the root Section that Parse returns, and whether the nesting limit
 // stopped a block or an inline from nesting.
-func parseStack(input string, trackPos bool) (doc *treeSection, tooDeep bool) {
+func parseStack(input string, trackPos bool) (doc *Section, tooDeep bool) {
 	p := &stackParser{lines: splitLines(input), doc: newDocument(trackPos), trackPos: trackPos, leafLastNewline: true}
 	blocks := p.parseAll()
 	var end *SourcePos
@@ -325,7 +325,7 @@ func parseStack(input string, trackPos bool) (doc *treeSection, tooDeep bool) {
 
 // parseAll runs every line through parseLine and closes what is open at
 // the end.
-func (p *stackParser) parseAll() []treeNode {
+func (p *stackParser) parseAll() []Node {
 	for _, l := range p.lines {
 		p.lineCount++
 		p.parseLine(l)
@@ -794,7 +794,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		if row := c.data.rowBefore; row != nil {
 			row.Head = true
 			for i, cell := range row.Children {
-				cell := cell.(*treeCell)
+				cell := cell.(*Cell)
 				cell.Head = true
 				cell.Align = alignAt(aligns, i)
 			}
@@ -802,7 +802,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		c.data.rowBefore = nil
 		return
 	}
-	row := &treeRow{}
+	row := &Row{}
 	// Each cell's text starts after the pipe before it; the cells are
 	// contiguous, one pipe apart.
 	off := cur.i + 1
@@ -814,7 +814,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		}
 		// No line end follows a cell: its trailing tab is content.
 		children, _ := p.leafInlines(0, false)
-		cell := &treeCell{Children: children, Align: alignAt(c.data.aligns, i)}
+		cell := &Cell{Children: children, Align: alignAt(c.data.aligns, i)}
 		row.Children = append(row.Children, p.spanned(cell, cur.at(off-1), cur.at(off+len(text))))
 		off += len(text) + 1
 	}
@@ -975,7 +975,7 @@ func (p *stackParser) dropLeaf() {
 // from; it empties the leaf buffers. endsLine says whether a line end
 // follows the text (a cell's does not). The ids it holds are registered:
 // those of inline attributes left on no node first, then the tree's.
-func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]treeNode, string) {
+func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]Node, string) {
 	defer p.dropLeaf()
 	src := strings.Join(p.leafSlices, "\n")
 	if src == "" {
@@ -1013,7 +1013,7 @@ func (p *stackParser) leafText() string {
 
 // leafChildren is the inlines of the open leaf, which a paragraph, heading
 // or caption c holds, and the leaf's range when positions are tracked.
-func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (children []treeNode, pos *Range) {
+func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (children []Node, pos *Range) {
 	children, _ = p.leafInlines(attrsFrom, true)
 	if p.trackPos {
 		pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
@@ -1022,20 +1022,20 @@ func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (childr
 }
 
 // leafPara is a paragraph over the open leaf.
-func (p *stackParser) leafPara(c *container, attrsFrom int, s stand) *treePara {
+func (p *stackParser) leafPara(c *container, attrsFrom int, s stand) *Para {
 	children, pos := p.leafChildren(c, attrsFrom, s)
-	return &treePara{treeHeader: treeHeader{Pos: pos}, Children: children}
+	return &Para{Header: Header{Pos: pos}, Children: children}
 }
 
 // leafEnd is where a paragraph, heading or caption ends: a caption one
 // before where the parser stands; the others after their last byte that is
 // not a trailing space or, ending in a hard break, at the next line's first
 // byte (a heading's first bare '#' line).
-func leafEnd(c *container, children []treeNode, s stand) SourcePos {
+func leafEnd(c *container, children []Node, s stand) SourcePos {
 	if c.kind == kindCaption {
 		return s.before
 	}
-	if _, ok := lastNode(children).(*treeHardBreak); ok {
+	if _, ok := lastNode(children).(*HardBreak); ok {
 		if c.kind == kindHeading && c.data.bareAt != nil {
 			return *c.data.bareAt
 		}
@@ -1070,7 +1070,7 @@ func (p *stackParser) closeFrom(from int, s stand) {
 }
 
 // lastNode is the last of nodes, or nil.
-func lastNode(nodes []treeNode) treeNode {
+func lastNode(nodes []Node) Node {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -1078,7 +1078,7 @@ func lastNode(nodes []treeNode) treeNode {
 }
 
 // spanned sets n's range when positions are tracked.
-func (p *stackParser) spanned(n treeNode, start, end SourcePos) treeNode {
+func (p *stackParser) spanned(n Node, start, end SourcePos) Node {
 	if p.trackPos {
 		n.header().Pos = &Range{Start: start, End: end}
 	}
@@ -1093,7 +1093,7 @@ func (p *stackParser) close(s stand) {
 	p.listEvent(t.kind == kindList, t.kind == kindListItem)
 	p.stack = p.stack[:len(p.stack)-1]
 	c := t
-	var n treeNode
+	var n Node
 	switch c.kind {
 	case kindPara:
 		// A failed attribute block that a line turned into a paragraph takes
@@ -1108,7 +1108,7 @@ func (p *stackParser) close(s stand) {
 	case kindHeading:
 		// Its inline ids are registered first, then the heading's own.
 		children, pos := p.leafChildren(c, 0, s)
-		h := &treeHeading{treeHeader: treeHeader{Pos: pos}, Level: c.data.level, Children: children}
+		h := &Heading{Header: Header{Pos: pos}, Level: c.data.level, Children: children}
 		explicit := ""
 		if ba := *p.attrsSlot(); ba != nil {
 			explicit = ba.id
@@ -1116,7 +1116,7 @@ func (p *stackParser) close(s stand) {
 		p.doc.ids.heading(h, explicit)
 		n = h
 	case kindThematicBreak:
-		n = p.spanned(&treeThematicBreak{}, c.start, *c.data.end)
+		n = p.spanned(&ThematicBreak{}, c.start, *c.data.end)
 	case kindAttributes:
 		slot := p.attrsSlot()
 		if a := c.data.attrs; a != nil {
@@ -1141,7 +1141,7 @@ func (p *stackParser) close(s stand) {
 		}
 		n = p.leafPara(c, p.failedAttrsFrom(), s)
 	case kindBlockQuote:
-		n = p.spanned(&treeBlockQuote{Children: c.children}, c.start, s.pos)
+		n = p.spanned(&BlockQuote{Children: c.children}, c.start, s.pos)
 	case kindFootnote:
 		// Recorded for the document, with the block attributes waiting
 		// before it.
@@ -1159,7 +1159,7 @@ func (p *stackParser) close(s stand) {
 		if c.data.end != nil {
 			end = *c.data.end
 		}
-		div := &treeDiv{Children: c.children}
+		div := &Div{Children: c.children}
 		if c.data.class != "" {
 			div.Attrs = []Attr{{"class", c.data.class}}
 		}
@@ -1172,9 +1172,9 @@ func (p *stackParser) close(s stand) {
 		}
 		lang := c.data.fence.lang
 		if strings.HasPrefix(lang, "=") {
-			n = &treeRawBlock{Format: lang[1:], Text: text}
+			n = &RawBlock{Format: lang[1:], Text: text}
 		} else {
-			n = &treeCodeBlock{Lang: lang, Text: text}
+			n = &CodeBlock{Lang: lang, Text: text}
 		}
 		p.spanned(n, c.start, end)
 	case kindReferenceDefinition:
@@ -1197,8 +1197,8 @@ func (p *stackParser) close(s stand) {
 		n = p.spanned(p.itemNode(c), c.start, s.before)
 	case kindTable:
 		// djot.js gives every table a caption, empty until one follows it.
-		children := append([]treeNode{&treeCaption{}}, c.children...)
-		n = p.spanned(&treeTable{Children: children}, c.start, s.pos)
+		children := append([]Node{&Caption{}}, c.children...)
+		n = p.spanned(&Table{Children: children}, c.start, s.pos)
 	case kindCaption:
 		p.closeCaption(c, s)
 		return
@@ -1208,7 +1208,7 @@ func (p *stackParser) close(s stand) {
 
 // closeAs appends n, with the block attributes waiting for it, to its
 // parent's children or the top-level blocks.
-func (p *stackParser) closeAs(n treeNode, s stand) {
+func (p *stackParser) closeAs(n Node, s stand) {
 	slot := p.attrsSlot()
 	if ba := *slot; ba != nil {
 		applyBlockAttrs(n, *ba)
@@ -1236,7 +1236,7 @@ func (p *stackParser) closeAs(n treeNode, s stand) {
 // way.
 func (p *stackParser) closeCaption(c *container, s stand) {
 	children, pos := p.leafChildren(c, 0, s)
-	n := &treeCaption{treeHeader: treeHeader{Pos: pos}, Children: children}
+	n := &Caption{Header: Header{Pos: pos}, Children: children}
 	slot := p.attrsSlot()
 	ba := *slot
 	*slot = nil
@@ -1255,12 +1255,12 @@ func (p *stackParser) closeCaption(c *container, s stand) {
 
 // tableBefore is the last sibling, if a table: the table a caption closing
 // now joins.
-func (p *stackParser) tableBefore() *treeTable {
+func (p *stackParser) tableBefore() *Table {
 	siblings := p.blocks
 	if len(p.stack) > 0 {
 		siblings = p.tip().children
 	}
-	t, _ := lastNode(siblings).(*treeTable)
+	t, _ := lastNode(siblings).(*Table)
 	return t
 }
 
@@ -1268,21 +1268,21 @@ func (p *stackParser) tableBefore() *treeTable {
 // its tightness and first bullet, an ordered list with djot.js's style
 // (the style it settled on, in its delimiter) and its first marker's text,
 // from which its start is read, or a definition list.
-func (p *stackParser) listNodeOf(c *container) treeNode {
+func (p *stackParser) listNodeOf(c *container) Node {
 	l := c.data.list
 	switch l.style {
 	case listTask:
-		return &treeTaskList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
+		return &TaskList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 	case listDefinition:
-		return &treeDefinitionList{Children: c.children}
+		return &DefinitionList{Children: c.children}
 	case listOrdered:
 		style := styleDecimal
 		if len(l.ordered.possible) > 0 {
 			style = l.ordered.possible[0]
 		}
-		return &treeOrderedList{Style: styleString(style, l.delim), Marker: l.markerText, Tight: l.tight, Children: c.children}
+		return &OrderedList{Style: styleString(style, l.delim), Marker: l.markerText, Tight: l.tight, Children: c.children}
 	}
-	return &treeBulletList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
+	return &BulletList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 }
 
 // itemNode is the node a closing item makes; its list is the tip. A
@@ -1290,19 +1290,19 @@ func (p *stackParser) listNodeOf(c *container) treeNode {
 // and the rest as the definition. Only the paragraph's inlines move, so a
 // block attribute on it (its id already registered) is not on the Term:
 // today's tree, which the corpus does not cover.
-func (p *stackParser) itemNode(c *container) treeNode {
+func (p *stackParser) itemNode(c *container) Node {
 	switch p.tip().data.list.style {
 	case listTask:
-		return &treeTaskListItem{Checked: c.data.checked, Children: c.children}
+		return &TaskListItem{Checked: c.data.checked, Children: c.children}
 	case listDefinition:
-		term, blocks := &treeTerm{}, c.children
+		term, blocks := &Term{}, c.children
 		if len(blocks) > 0 {
-			if para, ok := blocks[0].(*treePara); ok {
+			if para, ok := blocks[0].(*Para); ok {
 				term.Children = para.Children
 				blocks = blocks[1:]
 			}
 		}
-		return &treeDefinitionListItem{Children: []treeNode{term, &treeDefinition{Children: blocks}}}
+		return &DefinitionListItem{Children: []Node{term, &Definition{Children: blocks}}}
 	}
-	return &treeListItem{Children: c.children}
+	return &ListItem{Children: c.children}
 }

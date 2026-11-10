@@ -58,13 +58,13 @@ func TestEveryInlineNodeHasPosition(t *testing.T) {
 	src := "a _b_ *c* [l](u) ![i](u) [s]{.x} `v` x\\\ny\\ z {=m=} {+i+} {-d-} " +
 		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u ]{.c} {\"q <y ![i] { a\\\n"
 	doc := Parse([]byte(src), WithSourcePos())
-	para, ok := childrenOf(doc)[0].(*treePara)
+	para, ok := childrenOf(doc)[0].(*Para)
 	if !ok {
 		t.Fatalf("got %s, want para", childrenOf(doc)[0].Tag())
 	}
-	treeWalk(para, func(n treeNode) WalkStatus {
-		if n != treeNode(para) && n.header().Pos == nil {
-			t.Errorf("%s %q has no position", n.Tag(), inlineText([]treeNode{n}))
+	Walk(para, func(n Node) WalkStatus {
+		if n != Node(para) && n.header().Pos == nil {
+			t.Errorf("%s %q has no position", n.Tag(), inlineText([]Node{n}))
 		}
 		return WalkContinue
 	})
@@ -161,17 +161,17 @@ const (
 // inlineText spells inline nodes out for comparison: text as is, a hard
 // break as hardBreak, a non-breaking space as nbsp, a verbatim in
 // backticks, any other kind as its tag in angle brackets.
-func inlineText(nodes []treeNode) string {
+func inlineText(nodes []Node) string {
 	var b strings.Builder
 	for _, n := range nodes {
 		switch n := n.(type) {
-		case *treeHardBreak:
+		case *HardBreak:
 			b.WriteString(hardBreak)
-		case *treeNonBreakingSpace:
+		case *NonBreakingSpace:
 			b.WriteString(nbsp)
-		case *treeVerbatim:
+		case *Verbatim:
 			b.WriteString("`" + n.Text + "`")
-		case *treeStr:
+		case *Str:
 			b.WriteString(n.Text)
 		default:
 			b.WriteString("<" + string(n.Tag()) + ">")

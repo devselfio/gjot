@@ -125,9 +125,9 @@ func wantCount(t *testing.T, s, sub string, want int) {
 
 // inlineDepth is how deep inline elements nest under any paragraph of doc,
 // counting the elements that hold others (a text leaf adds no level).
-func inlineDepth(doc treeNode) int {
-	var under func(n treeNode) int
-	under = func(n treeNode) int {
+func inlineDepth(doc Node) int {
+	var under func(n Node) int
+	under = func(n Node) int {
 		d := 0
 		for _, c := range childrenOf(n) {
 			if len(childrenOf(c)) > 0 {
@@ -136,9 +136,9 @@ func inlineDepth(doc treeNode) int {
 		}
 		return d
 	}
-	var walk func(n treeNode) int
-	walk = func(n treeNode) int {
-		if _, ok := n.(*treePara); ok {
+	var walk func(n Node) int
+	walk = func(n Node) int {
+		if _, ok := n.(*Para); ok {
 			return under(n)
 		}
 		d := 0
