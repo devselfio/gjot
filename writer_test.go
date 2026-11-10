@@ -539,3 +539,33 @@ func TestWriterExplicitIDFallback(t *testing.T) {
 		t.Errorf("HTML\n%s\nwant\n%s", got, wantHTML)
 	}
 }
+
+// The writer reads no position: a tree parsed with source positions is
+// written byte for byte as the same tree parsed without them, and what it
+// writes reads back to the source's HTML. Every corpus input and the bench
+// page; checkCase holds the plain tree's round trip to the corpus, and this
+// pins the positioned tree to it.
+func TestWriterRoundTripWithSourcePos(t *testing.T) {
+	inputs := append(corpusInputs(t), readBenchPage(t))
+	for i, src := range inputs {
+		plain := Djot(Parse(src))
+		positioned := Djot(Parse(src, WithSourcePos()))
+		if string(positioned) != string(plain) {
+			t.Errorf("input %d: positioned tree written differently\n---input---\n%s---plain---\n%s---positioned---\n%s",
+				i, src, plain, positioned)
+			continue
+		}
+		want, err := HTML(Parse(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := HTML(Parse(positioned, WithSourcePos()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("input %d: positioned round trip changed HTML\n---input---\n%s---written---\n%s---want---\n%s---got---\n%s",
+				i, src, positioned, want, got)
+		}
+	}
+}
