@@ -59,7 +59,7 @@ func HTML(doc *Node, opts ...HTMLOption) ([]byte, error) {
 	for _, o := range opts {
 		o(r)
 	}
-	r.render(doc)
+	r.render(fromLegacy(doc))
 	r.endnotes()
 	if r.err != nil {
 		return nil, r.err

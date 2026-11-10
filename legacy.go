@@ -116,3 +116,65 @@ func fromLegacy(n *Node) treeNode {
 	}
 	panic("gjot: fromLegacy: unknown tag " + string(n.Tag))
 }
+
+// toLegacy converts the new tree to the old, the mirror of fromLegacy, for
+// the hooks, which take the old node until the API swaps. A task list item's
+// Checked is always set, as the parser sets it.
+func toLegacy(n treeNode) *Node {
+	h := n.header()
+	l := &Node{Tag: n.Tag(), ID: h.ID, Attrs: h.Attrs, Pos: h.Pos}
+	if cs := childrenOf(n); len(cs) > 0 {
+		l.Children = make([]*Node, len(cs))
+		for i, c := range cs {
+			l.Children[i] = toLegacy(c)
+		}
+	}
+	switch n := n.(type) {
+	case *treeSection:
+		l.Level, l.AutoID = n.Level, n.AutoID
+	case *treeHeading:
+		l.Level, l.AutoID = n.Level, n.AutoID
+	case *treeCodeBlock:
+		l.Lang, l.Text = n.Lang, n.Text
+	case *treeRawBlock:
+		l.Lang, l.Text = n.Format, n.Text
+	case *treeBulletList:
+		l.Style, l.Tight = n.Style, n.Tight
+	case *treeTaskList:
+		l.Style, l.Tight = n.Style, n.Tight
+	case *treeOrderedList:
+		l.Style, l.Text, l.Tight = n.Style, n.Marker, n.Tight
+	case *treeTaskListItem:
+		checked := n.Checked
+		l.Checked = &checked
+	case *treeRow:
+		l.Head = n.Head
+	case *treeCell:
+		l.Head, l.Align = n.Head, n.Align
+	case *treeFootnote:
+		l.Text = n.Label
+	case *treeStr:
+		l.Text, l.Source, l.off = n.Text, n.Source, n.off
+	case *treeVerbatim:
+		l.Text = n.Text
+	case *treeInlineMath:
+		l.Text = n.Text
+	case *treeDisplayMath:
+		l.Text = n.Text
+	case *treeRawInline:
+		l.Lang, l.Text = n.Format, n.Text
+	case *treeURL:
+		l.Text = n.Text
+	case *treeEmail:
+		l.Text = n.Text
+	case *treeFootnoteReference:
+		l.Text = n.Label
+	case *treeSymb:
+		l.Text = n.Alias
+	case *treeLink:
+		l.Destination, l.Reference = n.Destination, n.Reference
+	case *treeImage:
+		l.Destination, l.Reference = n.Destination, n.Reference
+	}
+	return l
+}

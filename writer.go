@@ -290,7 +290,7 @@ func (d *djotWriter) orderedList(n *Node) []string {
 	if !ok {
 		style, delim = styleDecimal, delimPeriod
 	}
-	start := orderedStart(n)
+	start := orderedStart(fromLegacy(n).(*treeOrderedList))
 	return d.listItems(n, func(i int, _ *Node) (string, string) {
 		marker := orderedMarker(start+i, style, delim)
 		if marker == "" {
