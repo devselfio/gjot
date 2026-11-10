@@ -357,14 +357,14 @@ func TestWriterTextEscapes(t *testing.T) {
 func TestWriterEscapesMarkupInText(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		para []*Node
+		para []Node
 	}{
-		{"markup-in-text", []*Node{{Tag: Str, Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
-		{"own-closer-inside-insert", []*Node{{Tag: Insert, Children: []*Node{{Tag: Str, Text: "a +} b"}}}}},
-		{"own-closer-inside-braced-emph", []*Node{{Tag: Emph, Children: []*Node{{Tag: Str, Text: " a _} b"}}}}},
+		{"markup-in-text", []Node{&Str{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
+		{"own-closer-inside-insert", []Node{&Insert{Children: []Node{&Str{Text: "a +} b"}}}}},
+		{"own-closer-inside-braced-emph", []Node{&Emph{Children: []Node{&Str{Text: " a _} b"}}}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			doc := &Node{Tag: Section, Children: []*Node{{Tag: Para, Children: c.para}}}
+			doc := &Section{Children: []Node{&Para{Children: c.para}}}
 			djot := Djot(doc)
 			got, err := HTML(Parse(djot))
 			if err != nil {
@@ -522,9 +522,9 @@ func TestWriterRegistersIDs(t *testing.T) {
 // (a tree built by hand: the id a later heading of the same text would get)
 // is written with the id explicit, so its HTML stands.
 func TestWriterExplicitIDFallback(t *testing.T) {
-	doc := &Node{Tag: Section, Children: []*Node{
-		{Tag: Section, Level: 1, ID: "a-1", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
-		{Tag: Section, Level: 1, ID: "a", AutoID: true, Children: []*Node{{Tag: Heading, Level: 1, Children: []*Node{{Tag: Str, Text: "a"}}}}},
+	doc := &Section{Children: []Node{
+		&Section{Header: Header{ID: "a-1"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
+		&Section{Header: Header{ID: "a"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
 	}}
 	djot := string(Djot(doc))
 	want := "# {#a}a\n\n{#a}\n# a\n"
@@ -537,5 +537,35 @@ func TestWriterExplicitIDFallback(t *testing.T) {
 	}
 	if wantHTML := "<section id=\"a-1\">\n<h1>a</h1>\n</section>\n<section id=\"a\">\n<h1>a</h1>\n</section>\n"; string(got) != wantHTML {
 		t.Errorf("HTML\n%s\nwant\n%s", got, wantHTML)
+	}
+}
+
+// The writer reads no position: a tree parsed with source positions is
+// written byte for byte as the same tree parsed without them, and what it
+// writes reads back to the source's HTML. Every corpus input and the bench
+// page; checkCase holds the plain tree's round trip to the corpus, and this
+// pins the positioned tree to it.
+func TestWriterRoundTripWithSourcePos(t *testing.T) {
+	inputs := append(corpusInputs(t), readBenchPage(t))
+	for i, src := range inputs {
+		plain := Djot(Parse(src))
+		positioned := Djot(Parse(src, WithSourcePos()))
+		if string(positioned) != string(plain) {
+			t.Errorf("input %d: positioned tree written differently\n---input---\n%s---plain---\n%s---positioned---\n%s",
+				i, src, plain, positioned)
+			continue
+		}
+		want, err := HTML(Parse(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := HTML(Parse(positioned, WithSourcePos()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("input %d: positioned round trip changed HTML\n---input---\n%s---written---\n%s---want---\n%s---got---\n%s",
+				i, src, positioned, want, got)
+		}
 	}
 }

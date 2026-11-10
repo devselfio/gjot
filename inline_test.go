@@ -58,20 +58,16 @@ func TestEveryInlineNodeHasPosition(t *testing.T) {
 	src := "a _b_ *c* [l](u) ![i](u) [s]{.x} `v` x\\\ny\\ z {=m=} {+i+} {-d-} " +
 		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u ]{.c} {\"q <y ![i] { a\\\n"
 	doc := Parse([]byte(src), WithSourcePos())
-	var walk func(n *Node)
-	walk = func(n *Node) {
-		for _, c := range n.Children {
-			if c.Pos == nil {
-				t.Errorf("%s %q has no position", c.Tag, c.Text)
-			}
-			walk(c)
+	para, ok := childrenOf(doc)[0].(*Para)
+	if !ok {
+		t.Fatalf("got %s, want para", childrenOf(doc)[0].Tag())
+	}
+	Walk(para, func(n Node) WalkStatus {
+		if n != Node(para) && n.header().Pos == nil {
+			t.Errorf("%s %q has no position", n.Tag(), inlineText([]Node{n}))
 		}
-	}
-	para := doc.Children[0]
-	if para.Tag != Para {
-		t.Fatalf("got %s, want para", para.Tag)
-	}
-	walk(para)
+		return WalkContinue
+	})
 }
 
 // The newline that joins two lines resolves to the next line, column 0, at
@@ -150,7 +146,7 @@ func TestLeafInlinesEndsLine(t *testing.T) {
 		{"`a  ", false, "`a  `"},
 		{"x ` ", true, "x ``"},
 	} {
-		nodes, _, _ := parseLeafInlines(tt.src, 0, tt.endsLine)
+		nodes, _, _ := parseLeafInlines(tt.src, 0, tt.endsLine, nil)
 		if got := inlineText(nodes); got != tt.want {
 			t.Errorf("parseLeafInlines(%q, endsLine=%v) = %q, want %q", tt.src, tt.endsLine, got, tt.want)
 		}
@@ -164,26 +160,28 @@ const (
 
 // inlineText spells inline nodes out for comparison: text as is, a hard
 // break as hardBreak, a non-breaking space as nbsp, a verbatim in
-// backticks.
-func inlineText(nodes []*Node) string {
+// backticks, any other kind as its tag in angle brackets.
+func inlineText(nodes []Node) string {
 	var b strings.Builder
 	for _, n := range nodes {
-		switch n.Tag {
-		case HardBreak:
+		switch n := n.(type) {
+		case *HardBreak:
 			b.WriteString(hardBreak)
-		case NonBreakingSpace:
+		case *NonBreakingSpace:
 			b.WriteString(nbsp)
-		case Verbatim:
+		case *Verbatim:
 			b.WriteString("`" + n.Text + "`")
-		default:
+		case *Str:
 			b.WriteString(n.Text)
+		default:
+			b.WriteString("<" + string(n.Tag()) + ">")
 		}
 	}
 	return b.String()
 }
 
 func TestStringContent(t *testing.T) {
-	nodes, _, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true)
+	nodes, _, _ := parseLeafInlines("Don't \"x\" a...b c--d e[^n]", 0, true, nil)
 	for _, tt := range []struct {
 		labels bool
 		want   string

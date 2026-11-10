@@ -6,9 +6,10 @@ import (
 )
 
 // Inline parsing with an opener stack. Text nodes sliced from the inline
-// source carry their offset in Node.off so adjacent slices merge, heading
-// ids can be derived from the raw source, and source positions can be
-// applied after the fact.
+// source carry their offset in Str.off so adjacent slices merge and
+// their source positions can be applied once the leaf is parsed
+// (applyStrPositions); every other node's position is set as it is made
+// (inlineParser.at).
 
 type itemKind int
 
@@ -59,7 +60,7 @@ func (op openerInfo) touches(pos int) bool {
 
 type inlineItem struct {
 	kind   itemKind
-	node   *Node
+	node   Node
 	opener openerInfo
 	attrs  blockAttrs
 	// An attribute item's source extent [attrsStart, attrsEnd); attrsDeep
@@ -106,16 +107,25 @@ type inlineParser struct {
 	noFootnoteBefore int
 	// tooDeep: an opener was refused at MaxNesting (mayOpen).
 	tooDeep bool
+	// lm maps offsets in src to source positions; nil when positions are
+	// not tracked.
+	lm *lineMap
 }
 
 // parseLeafInlines parses the inline source for the container stack: no
 // inline attribute is read at an offset before attrsFrom, endsLine says
 // whether a line end follows src, and the ids of inline attributes that
 // attached to no node (or that a later id replaced) are returned rather than
-// lost. tooDeep says an opener was refused at MaxNesting (mayOpen).
-func parseLeafInlines(src string, attrsFrom int, endsLine bool) (nodes []*Node, droppedIDs []string, tooDeep bool) {
+// lost. tooDeep says an opener was refused at MaxNesting (mayOpen). When lm
+// is not nil, every node has its position, a text node's set last from its
+// offset (applyStrPositions).
+func parseLeafInlines(src string, attrsFrom int, endsLine bool, lm *lineMap) (nodes []Node, droppedIDs []string, tooDeep bool) {
 	p := newInlineParser(src, attrsFrom, endsLine)
+	p.lm = lm
 	nodes = p.parse()
+	if lm != nil {
+		applyStrPositions(nodes, lm)
+	}
 	return nodes, p.dropped, p.tooDeep
 }
 
@@ -169,44 +179,50 @@ func openerKind(char byte, marked bool) int {
 }
 
 // strNode is a text node sliced from the inline source at off.
-func strNode(text string, off int) *Node {
-	return &Node{Tag: Str, Text: text, off: off + 1}
+func strNode(text string, off int) *Str {
+	return &Str{Text: text, off: off + 1}
 }
 
 // quoteLit is the text node a smart quote that pairs with nothing leaves:
 // the glyph it renders as, and the quote it was written as, which is what a
 // heading id or reference label reads (djot.js smart_punctuation text).
-func quoteLit(glyph, source string) *Node {
-	return &Node{Tag: Str, Text: glyph, Source: source}
+func quoteLit(glyph, source string) *Str {
+	return &Str{Text: glyph, Source: source}
 }
 
-// at records n's extent [start, end) in the inline source and returns n.
-func at(n *Node, start, end int) *Node {
-	n.src = srcSpan{start, end}
+// at sets n's position to its extent [start, end) in the inline source,
+// when positions are tracked, and returns n. A text slice's is set from its
+// offset instead, once the leaf is parsed, since joining and trimming
+// change its text.
+func (p *inlineParser) at(n Node, start, end int) Node {
+	if p.lm != nil {
+		n.header().Pos = p.lm.rangeOf(start, end)
+	}
 	return n
 }
 
 // tail returns a text node for n.Text[start:], keeping the source offset of
-// a slice or the extent of a literal. A literal whose text is not its source
-// bytes (a smart quote) keeps its whole extent, since its text cannot be
-// mapped byte for byte.
-func tail(n *Node, start int) *Node {
-	t := &Node{Tag: Str, Text: n.Text[start:]}
+// a slice, or the position of a literal (a smart quote, whose text is not
+// its source bytes and cannot be mapped byte for byte). A literal is only
+// ever taken whole: attachAttrs takes no word of a smart quote, and every
+// other text node is a slice. (The branch the single-struct tree had for a
+// literal whose text was as long as its source is gone: no such literal
+// exists, a smart quote's glyph being longer than the quote it was written
+// as.)
+func tail(n *Str, start int) *Str {
+	t := &Str{Text: n.Text[start:]}
 	if start == 0 {
 		t.Source = n.Source // the whole literal: a smart quote keeps its quote
 	}
-	switch {
-	case n.off > 0:
+	if n.off > 0 {
 		t.off = n.off + start
-	case n.src.end > 0 && start > 0 && n.src.end-n.src.start == len(n.Text):
-		t.src = srcSpan{n.src.start + start, n.src.end}
-	default:
-		t.src = n.src
+	} else {
+		t.Pos = n.Pos
 	}
 	return t
 }
 
-func (p *inlineParser) pushNode(n *Node) {
+func (p *inlineParser) pushNode(n Node) {
 	p.items = append(p.items, inlineItem{kind: itemNode, node: n})
 }
 
@@ -251,8 +267,9 @@ func (p *inlineParser) addText(text string, off int) {
 // joinText extends the text node last by n when both are adjacent slices of
 // the source: djot.js reports such text as one str. A node that is not a
 // slice (a smart quote's glyph) joins nothing.
-func (p *inlineParser) joinText(last, n *Node) bool {
-	if last.Tag != Str || n.Tag != Str || last.off == 0 || n.off == 0 || last.off-1+len(last.Text) != n.off-1 {
+func (p *inlineParser) joinText(lastNode Node, n *Str) bool {
+	last, ok := lastNode.(*Str)
+	if !ok || last.off == 0 || n.off == 0 || last.off-1+len(last.Text) != n.off-1 {
 		return false
 	}
 	last.Text = p.src[last.off-1 : n.off-1+len(n.Text)]
@@ -262,7 +279,7 @@ func (p *inlineParser) joinText(last, n *Node) bool {
 // appendText appends the text node n to nodes, joining it to the last node
 // when it can: an opener that did not close leaves text djot.js reports as
 // one str with its neighbours.
-func (p *inlineParser) appendText(nodes []*Node, n *Node) []*Node {
+func (p *inlineParser) appendText(nodes []Node, n *Str) []Node {
 	if len(nodes) > 0 && p.joinText(nodes[len(nodes)-1], n) {
 		return nodes
 	}
@@ -275,14 +292,43 @@ func (p *inlineParser) flushText() {
 	}
 }
 
-// closeAt wraps the items after opener i in a node of tag, spanning from the
-// opener to end (just past the closing delimiter), and drops openers from
-// index i up.
-func (p *inlineParser) closeAt(i int, tag Tag, end int) {
+// closeAt wraps the items after opener i in the node make makes of them,
+// spanning from the opener to end (just past the closing delimiter), and
+// drops openers from index i up.
+func (p *inlineParser) closeAt(i int, make func([]Node) Node, end int) {
 	op := p.openers[i]
 	children := p.collectChildren(op.itemIdx)
-	p.pushNode(at(&Node{Tag: tag, Children: children}, op.srcPos, end))
+	p.pushNode(p.at(make(children), op.srcPos, end))
 	p.truncateOpeners(i)
+}
+
+// inlineContainer is the constructor of the inline container of tag that a
+// matched or braced delimiter or a smart quote pair closes (matchedTag,
+// bracedTag, quoteTag).
+func inlineContainer(tag Tag) func([]Node) Node {
+	switch tag {
+	case "emph":
+		return func(c []Node) Node { return &Emph{Children: c} }
+	case "strong":
+		return func(c []Node) Node { return &Strong{Children: c} }
+	case "superscript":
+		return func(c []Node) Node { return &Superscript{Children: c} }
+	case "subscript":
+		return func(c []Node) Node { return &Subscript{Children: c} }
+	case "insert":
+		return func(c []Node) Node { return &Insert{Children: c} }
+	case "delete":
+		return func(c []Node) Node { return &Delete{Children: c} }
+	case "mark":
+		return func(c []Node) Node { return &Mark{Children: c} }
+	case "double_quoted":
+		return func(c []Node) Node { return &DoubleQuoted{Children: c} }
+	case "single_quoted":
+		return func(c []Node) Node { return &SingleQuoted{Children: c} }
+	case "span":
+		return func(c []Node) Node { return &Span{Children: c} }
+	}
+	panic("gjot: no inline container " + string(tag))
 }
 
 // truncateOpeners drops the openers from n up, each kind's top falling
@@ -306,7 +352,7 @@ func (p *inlineParser) dropParens(from int) {
 	}
 }
 
-func (p *inlineParser) parse() []*Node {
+func (p *inlineParser) parse() []Node {
 	src := p.src
 	for p.pos < len(src) {
 		c := src[p.pos]
@@ -321,7 +367,7 @@ func (p *inlineParser) parse() []*Node {
 			p.textStart = p.pos
 		case '\n':
 			p.flushText()
-			p.pushNode(at(&Node{Tag: SoftBreak}, p.pos, p.pos+1))
+			p.pushNode(p.at(&SoftBreak{}, p.pos, p.pos+1))
 			p.pos++
 			p.textStart = p.pos
 		// One rule for the four matched delimiters (djot.js's betweenMatched).
@@ -370,7 +416,7 @@ func (p *inlineParser) parse() []*Node {
 		case '[':
 			p.flushText()
 			if close := p.footnoteRefEnd(p.pos); close >= 0 {
-				p.pushNode(at(&Node{Tag: FootnoteReference, Text: normalizeLabel(src[p.pos+2 : close])}, p.pos, close+1))
+				p.pushNode(p.at(&FootnoteReference{Label: normalizeLabel(src[p.pos+2 : close])}, p.pos, close+1))
 				p.pos = close + 1
 				p.textStart = p.pos
 				continue
@@ -466,7 +512,7 @@ func (p *inlineParser) parse() []*Node {
 		case '.':
 			if p.pos+2 < len(src) && src[p.pos+1] == '.' && src[p.pos+2] == '.' {
 				p.flushText()
-				p.pushNode(at(&Node{Tag: Ellipsis}, p.pos, p.pos+3))
+				p.pushNode(p.at(&Ellipsis{}, p.pos, p.pos+3))
 				p.pos += 3
 				p.textStart = p.pos
 			} else {
@@ -513,7 +559,7 @@ func (p *inlineParser) handleBackslash() {
 			p.hardBreak(pos, skip)
 			p.pos = min(skip+1, len(src))
 		} else if next == ' ' {
-			p.pushNode(at(&Node{Tag: NonBreakingSpace}, pos+1, pos+2))
+			p.pushNode(p.at(&NonBreakingSpace{}, pos+1, pos+2))
 			p.pos += 2
 		} else {
 			p.addText(src[pos:pos+1], pos)
@@ -537,7 +583,7 @@ func (p *inlineParser) handleBackticks() {
 	closePos, ok := findClosingTicks(src, after, tickLen)
 	if !ok {
 		rest := p.unclosedRest(after)
-		p.pushNode(at(&Node{Tag: Verbatim, Text: trimVerbatimContent(rest)}, pos, after+len(rest)))
+		p.pushNode(p.at(&Verbatim{Text: trimVerbatimContent(rest)}, pos, after+len(rest)))
 		p.pos = len(src)
 		return
 	}
@@ -545,11 +591,11 @@ func (p *inlineParser) handleBackticks() {
 	afterClose := closePos + tickLen
 	p.pos = afterClose
 	if fe, ok := rawFormatEnd(src, afterClose); ok {
-		p.pushNode(at(&Node{Tag: RawInline, Text: content, Lang: src[afterClose+2 : fe]}, pos, fe+1))
+		p.pushNode(p.at(&RawInline{Format: src[afterClose+2 : fe], Text: content}, pos, fe+1))
 		p.pos = fe + 1
 		return
 	}
-	p.pushNode(at(&Node{Tag: Verbatim, Text: content}, pos, afterClose))
+	p.pushNode(p.at(&Verbatim{Text: content}, pos, afterClose))
 }
 
 // rawFormatEnd is where a raw format opening at pos (`{=`) ends: its `}`,
@@ -588,19 +634,19 @@ func (p *inlineParser) handleMath() {
 		p.pos += dollars
 		return
 	}
-	tag := InlineMath
+	math := func(text string) Node { return &InlineMath{Text: text} }
 	if dollars == 2 {
-		tag = DisplayMath
+		math = func(text string) Node { return &DisplayMath{Text: text} }
 	}
 	tickLen := countRunAt(src, tickStart, '`')
 	contentStart := tickStart + tickLen
 	if closePos, ok := findClosingTicks(src, contentStart, tickLen); ok {
-		p.pushNode(at(&Node{Tag: tag, Text: trimVerbatimContent(src[contentStart:closePos])}, pos, closePos+tickLen))
+		p.pushNode(p.at(math(trimVerbatimContent(src[contentStart:closePos])), pos, closePos+tickLen))
 		p.pos = closePos + tickLen
 		return
 	}
 	rest := p.unclosedRest(contentStart)
-	p.pushNode(at(&Node{Tag: tag, Text: trimVerbatimContent(rest)}, pos, contentStart+len(rest)))
+	p.pushNode(p.at(math(trimVerbatimContent(rest)), pos, contentStart+len(rest)))
 	p.pos = len(src)
 }
 
@@ -610,7 +656,7 @@ func (p *inlineParser) handleMath() {
 // that ends at the backslash.
 func (p *inlineParser) hardBreak(pos, nl int) {
 	p.trimLastText(pos, " \t")
-	p.pushNode(at(&Node{Tag: HardBreak}, pos+1, nl+1))
+	p.pushNode(p.at(&HardBreak{}, pos+1, nl+1))
 }
 
 // trimLastText drops blanks from the end of the last text node when it is a
@@ -624,8 +670,8 @@ func (p *inlineParser) trimLastText(end int, blanks string) {
 	if n == 0 || p.items[n-1].kind != itemNode {
 		return
 	}
-	last := p.items[n-1].node
-	if last.Tag != Str || last.off == 0 || last.off-1+len(last.Text) != end {
+	last, ok := p.items[n-1].node.(*Str)
+	if !ok || last.off == 0 || last.off-1+len(last.Text) != end {
 		return
 	}
 	last.Text = strings.TrimRight(last.Text, blanks)
@@ -649,17 +695,17 @@ func (p *inlineParser) unclosedRest(from int) string {
 func bracedTag(char byte) Tag {
 	switch char {
 	case '-':
-		return Delete
+		return "delete"
 	case '+':
-		return Insert
+		return "insert"
 	case '=':
-		return Mark
+		return "mark"
 	case '~':
-		return Subscript
+		return "subscript"
 	case '^':
-		return Superscript
+		return "superscript"
 	}
-	return Span
+	return "span"
 }
 
 // topOpener is the index of the nearest opener of char, marked or not, or
@@ -677,7 +723,7 @@ func (p *inlineParser) closeMarked(char byte, tag Tag) bool {
 	if i < 0 || p.openers[i].touches(p.pos) || p.outsideLink(i) {
 		return false
 	}
-	p.closeAt(i, tag, p.pos+2)
+	p.closeAt(i, inlineContainer(tag), p.pos+2)
 	return true
 }
 
@@ -690,13 +736,13 @@ func (p *inlineParser) handleBracedClose(char byte) bool {
 func matchedTag(char byte) Tag {
 	switch char {
 	case '*':
-		return Strong
+		return "strong"
 	case '_':
-		return Emph
+		return "emph"
 	case '~':
-		return Subscript
+		return "subscript"
 	}
-	return Superscript
+	return "superscript"
 }
 
 func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
@@ -715,7 +761,7 @@ func (p *inlineParser) handleEmphDelimiter(char byte, marked bool) {
 			if p.outsideLink(i) {
 				p.addText(src[pos:pos+1], pos)
 			} else {
-				p.closeAt(i, matchedTag(char), pos+1)
+				p.closeAt(i, inlineContainer(matchedTag(char)), pos+1)
 			}
 			p.pos = pos + 1
 			return
@@ -796,19 +842,21 @@ func (p *inlineParser) popParen() bool {
 // closeLink closes the link or image the bracket opener i began, on the ")"
 // or "]" ending at end: its text is the items before its "](" or "][", and
 // those from it on go.
-func (p *inlineParser) closeLink(i int, link *Node, end int) {
+//
+// dest is the destination of an explicit link, ref the label of a
+// reference link.
+func (p *inlineParser) closeLink(i int, dest *string, ref string, end int) {
 	op := p.openers[i]
 	open := op.link
 	p.items = p.items[:open.itemIdx]
 	p.dropped = p.dropped[:open.droppedLen]
-	link.Children = p.collectChildren(op.itemIdx)
-	link.Tag = Link
-	start := op.srcPos
+	children := p.collectChildren(op.itemIdx)
 	if op.char == '!' {
 		// djot.js starts an image on its bracket, not its "!".
-		link.Tag, start = Image, op.srcPos+1
+		p.pushNode(p.at(&Image{Destination: dest, Reference: ref, Children: children}, op.srcPos+1, end))
+	} else {
+		p.pushNode(p.at(&Link{Destination: dest, Reference: ref, Children: children}, op.srcPos, end))
 	}
-	p.pushNode(at(link, start, end))
 	p.truncateOpeners(i)
 }
 
@@ -832,7 +880,7 @@ func (p *inlineParser) handleCloseBracket() {
 		if norm := normalizeLabel(ref); norm != "" {
 			ref = norm
 		}
-		p.closeLink(i, &Node{Reference: ref}, pos+1)
+		p.closeLink(i, nil, ref, pos+1)
 		p.pos = pos + 1
 		return
 	}
@@ -864,7 +912,7 @@ func (p *inlineParser) handleCloseBracket() {
 			start++
 		}
 		// The span ends at its "]"; the attributes are not part of it.
-		span := at(&Node{Tag: Span, Children: children}, start, pos+1)
+		span := p.at(&Span{Children: children}, start, pos+1)
 		if ba, end, ok := p.inlineAttrs(next); ok {
 			applyBlockAttrs(span, ba)
 			p.pos = end
@@ -890,7 +938,7 @@ func (p *inlineParser) handleCloseParen() {
 	if i := p.nearestBracket(); i >= 0 {
 		if open := p.openers[i].link; open != nil && !open.reference {
 			dest := processUrl(p.src[open.srcPos+2 : pos])
-			p.closeLink(i, &Node{Destination: &dest}, pos+1)
+			p.closeLink(i, &dest, "", pos+1)
 			p.destination = false
 			p.pos = pos + 1
 			return
@@ -905,11 +953,11 @@ func (p *inlineParser) handleAutolink() bool {
 	if !ok {
 		return false
 	}
-	tag := URL
+	var n Node = &URL{Text: p.src[p.pos+1 : close]}
 	if email {
-		tag = Email
+		n = &Email{Text: p.src[p.pos+1 : close]}
 	}
-	p.pushNode(at(&Node{Tag: tag, Text: p.src[p.pos+1 : close]}, p.pos, close+1))
+	p.pushNode(p.at(n, p.pos, close+1))
 	p.pos = close + 1
 	return true
 }
@@ -965,7 +1013,7 @@ func (p *inlineParser) handleSymbol() bool {
 			return false
 		}
 	}
-	p.pushNode(at(&Node{Tag: Symb, Text: name}, pos, end+1))
+	p.pushNode(p.at(&Symb{Alias: name}, pos, end+1))
 	p.pos = end + 1
 	return true
 }
@@ -974,8 +1022,8 @@ func (p *inlineParser) handleSymbol() bool {
 // (3) and en dashes (2): all em if divisible by 3, else all en if divisible
 // by 2, else em first.
 func (p *inlineParser) emitDashes(start, count int) {
-	emit := func(n *Node, width int) {
-		p.pushNode(at(n, start, start+width))
+	emit := func(n Node, width int) {
+		p.pushNode(p.at(n, start, start+width))
 		start += width
 	}
 	if count <= 1 {
@@ -989,16 +1037,16 @@ func (p *inlineParser) emitDashes(start, count int) {
 	for remaining := count; remaining > 0; {
 		switch {
 		case allEm:
-			emit(&Node{Tag: EmDash}, 3)
+			emit(&EmDash{}, 3)
 			remaining -= 3
 		case allEn:
-			emit(&Node{Tag: EnDash}, 2)
+			emit(&EnDash{}, 2)
 			remaining -= 2
 		case remaining >= 3 && (remaining%2 != 0 || remaining > 4):
-			emit(&Node{Tag: EmDash}, 3)
+			emit(&EmDash{}, 3)
 			remaining -= 3
 		case remaining >= 2:
-			emit(&Node{Tag: EnDash}, 2)
+			emit(&EnDash{}, 2)
 			remaining -= 2
 		default:
 			p.addText(p.src[start:start+1], start)
@@ -1021,9 +1069,9 @@ func canOpenSingleQuote(src string, pos int) bool {
 
 func quoteTag(char byte) Tag {
 	if char == '"' {
-		return DoubleQuoted
+		return "double_quoted"
 	}
-	return SingleQuoted
+	return "single_quoted"
 }
 
 func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
@@ -1035,9 +1083,9 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 			return
 		}
 		if char == '\'' {
-			p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+2))
+			p.pushNode(p.at(quoteLit("\u2019", "'"), pos, pos+2))
 		} else {
-			p.pushNode(at(quoteLit("\u201d", "\""), pos, pos+2))
+			p.pushNode(p.at(quoteLit("\u201d", "\""), pos, pos+2))
 		}
 		p.pos = pos + 2
 		return
@@ -1050,11 +1098,11 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 	if canClose {
 		if i := p.topOpener(char, false); i >= 0 && !p.openers[i].touches(pos) {
 			if !p.outsideLink(i) {
-				p.closeAt(i, quoteTag(char), pos+1)
+				p.closeAt(i, inlineContainer(quoteTag(char)), pos+1)
 			} else if char == '\'' {
-				p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+1))
+				p.pushNode(p.at(quoteLit("\u2019", "'"), pos, pos+1))
 			} else {
-				p.pushNode(at(quoteLit("\u201c", "\""), pos, pos+1))
+				p.pushNode(p.at(quoteLit("\u201c", "\""), pos, pos+1))
 			}
 			p.pos = pos + 1
 			return
@@ -1073,16 +1121,16 @@ func (p *inlineParser) handleSmartQuote(char byte, marked bool) {
 		p.pushOpener(openerInfo{char: char, itemIdx: len(p.items), srcPos: openerStart(pos, marked), marked: marked})
 	} else if char == '\'' {
 		// Neither opens nor closes: an apostrophe.
-		p.pushNode(at(quoteLit("\u2019", "'"), pos, pos+1))
+		p.pushNode(p.at(quoteLit("\u2019", "'"), pos, pos+1))
 	} else {
-		p.pushNode(at(quoteLit("\u201c", "\""), pos, pos+1))
+		p.pushNode(p.at(quoteLit("\u201c", "\""), pos, pos+1))
 	}
 	p.pos = pos + 1
 }
 
 // collectChildren resolves the items after openerIdx into nodes and drops
 // them, along with the opener, from the item list.
-func (p *inlineParser) collectChildren(openerIdx int) []*Node {
+func (p *inlineParser) collectChildren(openerIdx int) []Node {
 	children := p.resolve(p.items[openerIdx+1:])
 	p.items = p.items[:openerIdx]
 	return children
@@ -1092,12 +1140,16 @@ func (p *inlineParser) collectChildren(openerIdx int) []*Node {
 // that never closed is text too, and a marked one starts a text node of its
 // own, as djot.js's open marker breaks the run of text before it (the text
 // after it joins it).
-func (p *inlineParser) resolve(items []inlineItem) []*Node {
-	var nodes []*Node
+func (p *inlineParser) resolve(items []inlineItem) []Node {
+	var nodes []Node
 	for _, it := range items {
 		switch it.kind {
 		case itemNode:
-			nodes = p.appendText(nodes, it.node)
+			if s, ok := it.node.(*Str); ok {
+				nodes = p.appendText(nodes, s)
+			} else {
+				nodes = append(nodes, it.node)
+			}
 		case itemOpener:
 			if it.opener.marked {
 				nodes = append(nodes, p.openerText(it.opener))
@@ -1139,37 +1191,40 @@ func openerLen(op openerInfo) int {
 // openerText is the text node an unmatched opener leaves behind: its source
 // bytes, or for a smart quote the glyph it renders as, with the quote it was
 // written as.
-func (p *inlineParser) openerText(op openerInfo) *Node {
+func (p *inlineParser) openerText(op openerInfo) *Str {
 	switch op.char {
 	case '\'':
 		glyph := "\u2019"
 		if op.marked {
 			glyph = "\u2018"
 		}
-		return at(quoteLit(glyph, "'"), op.srcPos, op.srcPos+openerLen(op))
+		return p.at(quoteLit(glyph, "'"), op.srcPos, op.srcPos+openerLen(op)).(*Str)
 	case '"':
-		return at(quoteLit("\u201c", "\""), op.srcPos, op.srcPos+openerLen(op))
+		return p.at(quoteLit("\u201c", "\""), op.srcPos, op.srcPos+openerLen(op)).(*Str)
 	}
 	return strNode(p.src[op.srcPos:op.srcPos+openerLen(op)], op.srcPos)
 }
 
-func (p *inlineParser) resolveItems() []*Node {
+func (p *inlineParser) resolveItems() []Node {
 	return p.resolve(p.items)
 }
 
 // isSmartQuote reports whether n is the glyph a smart quote that paired
 // with nothing left: text whose source is the quote it was written as.
-func isSmartQuote(n *Node) bool { return n.Tag == Str && n.Source != "" }
+func isSmartQuote(n Node) bool {
+	s, ok := n.(*Str)
+	return ok && s.Source != ""
+}
 
 // spanWord is where the word an inline attribute after nodes wraps in a span
 // starts in the last node's text, or -1 when it makes no span: the last
 // node is no text, a smart quote, or text ending in a blank.
-func spanWord(nodes []*Node) int {
+func spanWord(nodes []Node) int {
 	if len(nodes) == 0 {
 		return -1
 	}
-	last := nodes[len(nodes)-1]
-	if last.Tag != Str || isSmartQuote(last) {
+	last, ok := nodes[len(nodes)-1].(*Str)
+	if !ok || last.Source != "" {
 		return -1
 	}
 	wordStart := 0
@@ -1191,20 +1246,25 @@ func spanWord(nodes []*Node) int {
 // non-breaking space takes none. It also reports the id the attributes
 // registered and left on no node: theirs when they attached to nothing, or
 // the id they replaced on the node they attached to.
-func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
+func (p *inlineParser) attachAttrs(nodes []Node, ba blockAttrs) ([]Node, string) {
 	if len(nodes) == 0 {
 		return nodes, ba.id
 	}
 	last := nodes[len(nodes)-1]
-	if last.Tag == Str && !isSmartQuote(last) {
+	if last, ok := last.(*Str); ok && last.Source == "" {
 		text := last.Text
 		wordStart := spanWord(nodes)
 		if wordStart < 0 {
 			return nodes, ba.id
 		}
 		word := tail(last, wordStart)
-		ws := textSpan(word)
-		span := at(&Node{Tag: Span, Children: []*Node{word}}, ws.start, ws.end)
+		span := &Span{Children: []Node{word}}
+		if word.off > 0 {
+			ws := textSpan(word)
+			p.at(span, ws.start, ws.end)
+		} else {
+			span.Pos = word.Pos
+		}
 		applyBlockAttrs(span, ba)
 		if wordStart == 0 {
 			nodes[len(nodes)-1] = span
@@ -1214,13 +1274,13 @@ func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 		}
 		return nodes, ""
 	}
-	switch last.Tag {
-	case Str, Span, Link, Image, Emph, Strong, Verbatim, Mark,
-		Superscript, Subscript, Insert, Delete, DoubleQuoted, SingleQuoted,
-		URL, Email, InlineMath, DisplayMath, FootnoteReference, Symb:
+	switch last.(type) {
+	case *Str, *Span, *Link, *Image, *Emph, *Strong, *Verbatim, *Mark,
+		*Superscript, *Subscript, *Insert, *Delete, *DoubleQuoted, *SingleQuoted,
+		*URL, *Email, *InlineMath, *DisplayMath, *FootnoteReference, *Symb:
 		replaced := ""
 		if ba.writesID() {
-			replaced = last.ID
+			replaced = last.header().ID
 		}
 		applyLaterAttrs(last, ba)
 		return nodes, replaced
@@ -1233,7 +1293,8 @@ func attachAttrs(nodes []*Node, ba blockAttrs) ([]*Node, string) {
 // A node with attributes of its own (a div's class) keeps them after the
 // block attribute's, classes joined, as djot.js: `{.x}` before `::: y` gives
 // `class="x y"`.
-func applyBlockAttrs(n *Node, ba blockAttrs) {
+func applyBlockAttrs(node Node, ba blockAttrs) {
+	n := node.header()
 	if len(n.Attrs) > 0 && len(ba.attrs) > 0 {
 		n.Attrs = ba.merge(attrsOf(n.Attrs)).attrs
 	} else if len(ba.attrs) > 0 {
@@ -1248,7 +1309,8 @@ func applyBlockAttrs(n *Node, ba blockAttrs) {
 // the first keeps its places, the later's values win and its classes join
 // after, as djot.js's attribute object (`[x]{#i .c}{.d}` gives `id="i"
 // class="c d"`; an `id=""` after `#y` leaves no id).
-func applyLaterAttrs(n *Node, ba blockAttrs) {
+func applyLaterAttrs(node Node, ba blockAttrs) {
+	n := node.header()
 	merged := blockAttrs{id: n.ID, attrs: n.Attrs}.merge(ba)
 	n.ID, n.Attrs = merged.id, merged.attrs
 }
@@ -1428,81 +1490,43 @@ func normalizeLabel(raw string) string {
 // space and a symbol as nothing. A footnote reference's label is read only
 // when footnoteLabels is set: zjot leaves it out of a heading's text
 // (zjot.test difference 2).
-func stringContent(nodes []*Node, footnoteLabels bool) string {
+func stringContent(nodes []Node, footnoteLabels bool) string {
 	var b strings.Builder
-	var walk func([]*Node)
-	walk = func(nodes []*Node) {
-		for _, n := range nodes {
-			switch n.Tag {
-			case Str:
-				if n.Source != "" {
-					b.WriteString(n.Source)
-				} else {
-					b.WriteString(n.Text)
-				}
-			case Verbatim, InlineMath, DisplayMath, RawInline, URL, Email:
-				b.WriteString(n.Text)
-			case SoftBreak, HardBreak:
-				b.WriteByte('\n')
-			case Ellipsis:
-				b.WriteString("...")
-			case EmDash:
-				b.WriteString("---")
-			case EnDash:
-				b.WriteString("--")
-			case FootnoteReference:
-				if footnoteLabels {
-					b.WriteString(n.Text)
-				}
-			case NonBreakingSpace, Symb:
-			default:
-				walk(n.Children)
-			}
-		}
-	}
-	walk(nodes)
-	return b.String()
-}
-
-// treeStringContent is stringContent over the new tree, for the renderers;
-// the parser keeps stringContent until it builds the new tree.
-func treeStringContent(nodes []treeNode, footnoteLabels bool) string {
-	var b strings.Builder
-	var walk func([]treeNode)
-	walk = func(nodes []treeNode) {
+	var walk func([]Node)
+	walk = func(nodes []Node) {
 		for _, n := range nodes {
 			switch n := n.(type) {
-			case *treeStr:
+			case *Str:
 				if n.Source != "" {
 					b.WriteString(n.Source)
 				} else {
 					b.WriteString(n.Text)
 				}
-			case *treeVerbatim:
+			case *Verbatim:
 				b.WriteString(n.Text)
-			case *treeInlineMath:
+			case *InlineMath:
 				b.WriteString(n.Text)
-			case *treeDisplayMath:
+			case *DisplayMath:
 				b.WriteString(n.Text)
-			case *treeRawInline:
+			case *RawInline:
 				b.WriteString(n.Text)
-			case *treeURL:
+			case *URL:
 				b.WriteString(n.Text)
-			case *treeEmail:
+			case *Email:
 				b.WriteString(n.Text)
-			case *treeSoftBreak, *treeHardBreak:
+			case *SoftBreak, *HardBreak:
 				b.WriteByte('\n')
-			case *treeEllipsis:
+			case *Ellipsis:
 				b.WriteString("...")
-			case *treeEmDash:
+			case *EmDash:
 				b.WriteString("---")
-			case *treeEnDash:
+			case *EnDash:
 				b.WriteString("--")
-			case *treeFootnoteReference:
+			case *FootnoteReference:
 				if footnoteLabels {
 					b.WriteString(n.Label)
 				}
-			case *treeNonBreakingSpace, *treeSymb:
+			case *NonBreakingSpace, *Symb:
 			default:
 				walk(childrenOf(n))
 			}
@@ -1515,7 +1539,8 @@ func treeStringContent(nodes []treeNode, footnoteLabels bool) string {
 // mergeRefAttrs layers a reference definition's attributes under the link's
 // own, as djot.js: the definition's that the link does not set come first,
 // then the link's own in their order; nothing joins.
-func mergeRefAttrs(n *Node, ref blockAttrs) {
+func mergeRefAttrs(node Node, ref blockAttrs) {
+	n := node.header()
 	if n.ID == "" {
 		n.ID = ref.id
 	}
@@ -1535,13 +1560,17 @@ func mergeRefAttrs(n *Node, ref blockAttrs) {
 	n.Attrs = append(merged, n.Attrs...)
 }
 
-// textSpan is the extent of a text node in the inline source: of the slice
-// it is, or of the literal it stands for.
-func textSpan(n *Node) srcSpan {
+// srcSpan is a byte range [start, end) in the inline source a node was
+// parsed from.
+type srcSpan struct{ start, end int }
+
+// textSpan is the extent of a text slice in the inline source; the zero
+// span for a literal, which is no slice.
+func textSpan(n *Str) srcSpan {
 	if n.off > 0 {
 		return srcSpan{n.off - 1, n.off - 1 + len(n.Text)}
 	}
-	return n.src
+	return srcSpan{}
 }
 
 // inlineAttrs parses an inline attribute at pos, unless pos is before
@@ -1554,8 +1583,8 @@ func (p *inlineParser) inlineAttrs(pos int) (blockAttrs, int, bool) {
 }
 
 // attach is attachAttrs, keeping the id it leaves on no node.
-func (p *inlineParser) attach(nodes []*Node, ba blockAttrs) []*Node {
-	nodes, dropped := attachAttrs(nodes, ba)
+func (p *inlineParser) attach(nodes []Node, ba blockAttrs) []Node {
+	nodes, dropped := p.attachAttrs(nodes, ba)
 	if dropped != "" {
 		p.dropped = append(p.dropped, dropped)
 	}

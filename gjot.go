@@ -22,22 +22,22 @@ type parseConfig struct {
 	sourcePos bool
 }
 
-// WithSourcePos records each node's source range in Node.Pos.
+// WithSourcePos records each node's source range in its header's Pos.
 func WithSourcePos() ParseOption {
 	return func(c *parseConfig) { c.sourcePos = true }
 }
 
-// Parse parses Djot source into an AST. It never fails: every byte sequence
-// is a Djot document. Nesting past MaxNesting is read as text; ParseErr
-// reports it.
-func Parse(src []byte, opts ...ParseOption) *Node {
+// Parse parses Djot source into an AST, whose root is a *Section of
+// Level 0. It never fails: every byte sequence is a Djot document. Nesting
+// past MaxNesting is read as text; ParseErr reports it.
+func Parse(src []byte, opts ...ParseOption) Node {
 	doc, _ := ParseErr(src, opts...)
 	return doc
 }
 
 // ParseErr is Parse that also reports ErrTooDeep when the source nested past
 // MaxNesting. The tree is returned either way and is the one Parse returns.
-func ParseErr(src []byte, opts ...ParseOption) (*Node, error) {
+func ParseErr(src []byte, opts ...ParseOption) (Node, error) {
 	var cfg parseConfig
 	for _, o := range opts {
 		o(&cfg)
@@ -54,12 +54,12 @@ type HTMLOption func(*renderer)
 
 // HTML renders doc as HTML, byte for byte as djot.js does. The error is nil
 // unless a hook returns one.
-func HTML(doc *Node, opts ...HTMLOption) ([]byte, error) {
+func HTML(doc Node, opts ...HTMLOption) ([]byte, error) {
 	r := &renderer{}
 	for _, o := range opts {
 		o(r)
 	}
-	r.render(fromLegacyLinks(doc, &r.linkTexts))
+	r.render(doc)
 	r.endnotes()
 	if r.err != nil {
 		return nil, r.err

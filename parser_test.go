@@ -234,12 +234,12 @@ func TestStackUnits(t *testing.T) {
 	}
 }
 
-// positionedBlocks are the block tags that carry Node.Pos under
+// positionedBlocks are the block kinds that carry a position under
 // WithSourcePos (issue #16), at any depth.
-var positionedBlocks = []Tag{
-	BlockQuote, Heading, Section, CodeBlock, RawBlock, Div, ThematicBreak,
-	Table, Row, Cell, Caption, DefinitionList, DefinitionListItem,
-	BulletList, OrderedList, TaskList, ListItem, TaskListItem,
+var positionedBlocks = []Node{
+	&BlockQuote{}, &Heading{}, &Section{}, &CodeBlock{}, &RawBlock{}, &Div{}, &ThematicBreak{},
+	&Table{}, &Row{}, &Cell{}, &Caption{}, &DefinitionList{}, &DefinitionListItem{},
+	&BulletList{}, &OrderedList{}, &TaskList{}, &ListItem{}, &TaskListItem{},
 }
 
 // TestEveryBlockNodeHasPosition parses one document holding each
@@ -269,63 +269,63 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 	// block quote or list item), inside a block quote and inside a list item.
 	type seen struct{ top, quote, item bool }
 	where := map[Tag]*seen{}
-	var walk func(n *Node, inQuote, inItem bool)
-	walk = func(n *Node, inQuote, inItem bool) {
-		s := where[n.Tag]
+	var walk func(n Node, inQuote, inItem bool)
+	walk = func(n Node, inQuote, inItem bool) {
+		s := where[n.Tag()]
 		if s == nil {
 			s = &seen{}
-			where[n.Tag] = s
+			where[n.Tag()] = s
 		}
 		s.top = s.top || (!inQuote && !inItem)
 		s.quote = s.quote || inQuote
 		s.item = s.item || inItem
-		switch n.Tag {
-		case Term, Definition:
-			if n.Pos != nil {
-				t.Errorf("%s has a position %+v; zjot prints none", n.Tag, *n.Pos)
+		pos := n.header().Pos
+		switch n.(type) {
+		case *Term, *Definition:
+			if pos != nil {
+				t.Errorf("%s has a position %+v; zjot prints none", n.Tag(), *pos)
 			}
 		default:
-			for _, tag := range positionedBlocks {
-				if n.Tag == tag && n.Pos == nil {
-					t.Errorf("%s (quote=%v item=%v) has no position", n.Tag, inQuote, inItem)
+			for _, kind := range positionedBlocks {
+				if n.Tag() == kind.Tag() && pos == nil {
+					t.Errorf("%s (quote=%v item=%v) has no position", n.Tag(), inQuote, inItem)
 				}
 			}
 		}
-		for _, c := range n.Children {
-			walk(c, inQuote || n.Tag == BlockQuote, inItem || n.Tag == ListItem)
+		_, quote := n.(*BlockQuote)
+		_, item := n.(*ListItem)
+		for _, c := range childrenOf(n) {
+			walk(c, inQuote || quote, inItem || item)
 		}
 	}
 	// The root is a section printed as doc, without a position.
-	for _, c := range Parse([]byte(input), WithSourcePos()).Children {
+	for _, c := range childrenOf(Parse([]byte(input), WithSourcePos())) {
 		walk(c, false, false)
 	}
-	for _, tag := range positionedBlocks {
+	for _, kind := range positionedBlocks {
+		tag := kind.Tag()
 		s := where[tag]
 		switch {
 		case s == nil:
 			t.Errorf("%s does not occur in the document", tag)
-		case tag == Section:
+		case tag == "section":
 			// Sections are built at the document level only.
 		case !s.top || !s.quote || !s.item:
 			t.Errorf("%s occurs top=%v, in a quote=%v, in an item=%v; want all three", tag, s.top, s.quote, s.item)
 		}
 	}
-	for _, tag := range []Tag{Term, Definition} {
+	for _, tag := range []Tag{"term", "definition"} {
 		if where[tag] == nil {
 			t.Errorf("%s does not occur in the document", tag)
 		}
 	}
 
-	var none func(n *Node)
-	none = func(n *Node) {
-		if n.Pos != nil {
-			t.Errorf("without WithSourcePos, %s has a position %+v", n.Tag, *n.Pos)
+	Walk(Parse([]byte(input)), func(n Node) WalkStatus {
+		if pos := n.header().Pos; pos != nil {
+			t.Errorf("without WithSourcePos, %s has a position %+v", n.Tag(), *pos)
 		}
-		for _, c := range n.Children {
-			none(c)
-		}
-	}
-	none(Parse([]byte(input)))
+		return WalkContinue
+	})
 }
 
 // TestBlockEnds pins where blocks end, as exact AST text with positions,
@@ -472,7 +472,7 @@ func TestHeadingIDFromText(t *testing.T) {
 }
 
 // An ordered list node carries djot.js's style ("1.", "(a)", "I)") in Style
-// and its first marker's text in Text, from which its start is read; it has
+// and its first marker's text in Marker, from which its start is read; it has
 // no start or type attribute, so the AST prints the style alone
 // (zjot.test L6467, L6486, L7706).
 func TestOrderedListNode(t *testing.T) {
@@ -487,10 +487,11 @@ func TestOrderedListNode(t *testing.T) {
 		{"IV. x\n", "I.", "IV"},
 	}
 	for _, c := range cases {
-		list := Parse([]byte(c.input)).Children[0]
-		if list.Tag != OrderedList || list.Style != c.style || list.Text != c.text || len(list.Attrs) != 0 {
-			t.Errorf("%q: got tag=%s style=%q text=%q attrs=%v; want ordered_list style=%q text=%q, no attrs",
-				c.input, list.Tag, list.Style, list.Text, list.Attrs, c.style, c.text)
+		first := Parse([]byte(c.input)).(*Section).Children[0]
+		list, ok := first.(*OrderedList)
+		if !ok || list.Style != c.style || list.Marker != c.text || len(list.Attrs) != 0 {
+			t.Errorf("%q: got %s %+v; want ordered_list style=%q marker=%q, no attrs",
+				c.input, first.Tag(), first, c.style, c.text)
 		}
 	}
 	want := "doc\n  ordered_list tight=true style=\"(a)\"\n    list_item\n      para\n        str text=\"x\"\n" +
@@ -507,14 +508,14 @@ func TestOrderedListNode(t *testing.T) {
 func TestFootnoteDefinitionsInTree(t *testing.T) {
 	doc := Parse([]byte("use[^a  b]\n\n[^x]: one\n\n[^y]: two\n\n[^x]: three\n"))
 	var got []string
-	for _, b := range doc.Children {
-		switch b.Tag {
-		case Footnote:
-			got = append(got, "footnote "+b.Text+"="+b.Children[0].Children[0].Text)
-		case Para:
-			got = append(got, "para ref="+b.Children[1].Text)
+	for _, b := range childrenOf(doc) {
+		switch b := b.(type) {
+		case *Footnote:
+			got = append(got, "footnote "+b.Label+"="+b.Children[0].(*Para).Children[0].(*Str).Text)
+		case *Para:
+			got = append(got, "para ref="+b.Children[1].(*FootnoteReference).Label)
 		default:
-			got = append(got, string(b.Tag))
+			got = append(got, string(b.Tag()))
 		}
 	}
 	want := []string{"para ref=a b", "footnote x=three", "footnote y=two"}

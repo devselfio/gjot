@@ -1,82 +1,82 @@
 package gjot
 
-// treeWalk visits n and then its descendants in document order: a node
+// Walk visits n and then its descendants in document order: a node
 // before its children, children in order, the footnote definitions after the
 // body as the tree holds them. When visit returns WalkSkipChildren for a
 // node, its children are not visited.
-func treeWalk(n treeNode, visit func(n treeNode) WalkStatus) {
+func Walk(n Node, visit func(n Node) WalkStatus) {
 	if visit(n) == WalkSkipChildren {
 		return
 	}
 	for _, c := range childrenOf(n) {
-		treeWalk(c, visit)
+		Walk(c, visit)
 	}
 }
 
 // childrenOf is n's children, or nil for a kind that has none.
-func childrenOf(n treeNode) []treeNode {
+func childrenOf(n Node) []Node {
 	switch n := n.(type) {
-	case *treeSection:
+	case *Section:
 		return n.Children
-	case *treeHeading:
+	case *Heading:
 		return n.Children
-	case *treePara:
+	case *Para:
 		return n.Children
-	case *treeBlockQuote:
+	case *BlockQuote:
 		return n.Children
-	case *treeDiv:
+	case *Div:
 		return n.Children
-	case *treeBulletList:
+	case *BulletList:
 		return n.Children
-	case *treeTaskList:
+	case *TaskList:
 		return n.Children
-	case *treeOrderedList:
+	case *OrderedList:
 		return n.Children
-	case *treeDefinitionList:
+	case *DefinitionList:
 		return n.Children
-	case *treeListItem:
+	case *ListItem:
 		return n.Children
-	case *treeTaskListItem:
+	case *TaskListItem:
 		return n.Children
-	case *treeDefinitionListItem:
+	case *DefinitionListItem:
 		return n.Children
-	case *treeTerm:
+	case *Term:
 		return n.Children
-	case *treeDefinition:
+	case *Definition:
 		return n.Children
-	case *treeTable:
+	case *Table:
 		return n.Children
-	case *treeCaption:
+	case *Caption:
 		return n.Children
-	case *treeRow:
+	case *Row:
 		return n.Children
-	case *treeCell:
+	case *Cell:
 		return n.Children
-	case *treeFootnote:
+	case *Footnote:
 		return n.Children
-	case *treeEmph:
+	case *Emph:
 		return n.Children
-	case *treeStrong:
+	case *Strong:
 		return n.Children
-	case *treeSpan:
+	case *Span:
 		return n.Children
-	case *treeMark:
+	case *Mark:
 		return n.Children
-	case *treeSuperscript:
+	case *Superscript:
 		return n.Children
-	case *treeSubscript:
+	case *Subscript:
 		return n.Children
-	case *treeInsert:
+	case *Insert:
 		return n.Children
-	case *treeDelete:
+	case *Delete:
 		return n.Children
-	case *treeDoubleQuoted:
+	case *DoubleQuoted:
 		return n.Children
-	case *treeSingleQuoted:
+	case *SingleQuoted:
 		return n.Children
-	case *treeLink:
+	case *Link:
 		return n.Children
-	case *treeImage:
+	case *Image:
 		return n.Children
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func renderWith(t *testing.T, src string, opts ...HTMLOption) string {
 }
 
 func TestHookReplacesDivByClass(t *testing.T) {
-	chess := func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+	chess := func(w io.Writer, n Node, entering bool) (WalkStatus, error) {
 		if entering {
 			fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
 		}
@@ -31,7 +32,7 @@ func TestHookReplacesDivByClass(t *testing.T) {
 
 func TestHookWrapsChildrenAndNests(t *testing.T) {
 	wrap := func(open, close string) Hook {
-		return func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+		return func(w io.Writer, n Node, entering bool) (WalkStatus, error) {
 			if entering {
 				io.WriteString(w, open)
 			} else {
@@ -50,7 +51,7 @@ func TestHookWrapsChildrenAndNests(t *testing.T) {
 // A hook stands in for the div only: the enclosing tight list still renders
 // the paragraphs inside it bare, as it does an unhooked div's.
 func TestHookInTightItemKeepsListTightness(t *testing.T) {
-	aside := func(w io.Writer, n *Node, entering bool) (WalkStatus, error) {
+	aside := func(w io.Writer, n Node, entering bool) (WalkStatus, error) {
 		if entering {
 			io.WriteString(w, "<aside>\n")
 		} else {
@@ -65,7 +66,7 @@ func TestHookInTightItemKeepsListTightness(t *testing.T) {
 }
 
 func TestHookUnregisteredClassRendersDefault(t *testing.T) {
-	got := renderWith(t, "{fen=abc}\n::: chess\n:::\n", WithHook("other", func(io.Writer, *Node, bool) (WalkStatus, error) {
+	got := renderWith(t, "{fen=abc}\n::: chess\n:::\n", WithHook("other", func(io.Writer, Node, bool) (WalkStatus, error) {
 		t.Error("hook for another class called")
 		return WalkContinue, nil
 	}))
@@ -76,7 +77,7 @@ func TestHookUnregisteredClassRendersDefault(t *testing.T) {
 
 func TestHookErrorAbortsRender(t *testing.T) {
 	boom := errors.New("boom")
-	_, err := HTML(Parse([]byte("::: x\n:::\n")), WithHook("x", func(io.Writer, *Node, bool) (WalkStatus, error) {
+	_, err := HTML(Parse([]byte("::: x\n:::\n")), WithHook("x", func(io.Writer, Node, bool) (WalkStatus, error) {
 		return WalkContinue, boom
 	}))
 	if !errors.Is(err, boom) {
@@ -86,7 +87,7 @@ func TestHookErrorAbortsRender(t *testing.T) {
 
 func TestNodeHasClassAndAttr(t *testing.T) {
 	doc := Parse([]byte("{#id .a .b k=v}\n::: c\n:::\n"))
-	div := doc.Children[0]
+	div := doc.(*Section).Children[0]
 	// The fence class joins the block attribute's classes, as djot.js
 	// (zjot.test L6431), so every one of them is found.
 	for _, c := range []string{"a", "b", "c"} {
@@ -102,5 +103,48 @@ func TestNodeHasClassAndAttr(t *testing.T) {
 	}
 	if got := div.Attr("missing"); got != "" {
 		t.Errorf("Attr(missing) = %q, want empty", got)
+	}
+}
+
+// TestReadmeHookCompiles is the README's Library usage example as written
+// there, but for the gjot. qualifiers this package-internal test cannot
+// use: the hook, and a walk that type-switches on the kinds. Keep the two
+// in step.
+func TestReadmeHookCompiles(t *testing.T) {
+	doc := Parse([]byte("# Title\n\nSee [the docs](https://example.com).\n\n{fen=abc}\n::: chess\n:::\n"))
+	html, err := HTML(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Render fenced divs of a class yourself: `::: chess {fen=...}`
+	board := func(w io.Writer, n Node, entering bool) (WalkStatus, error) {
+		if entering {
+			fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
+		}
+		return WalkSkipChildren, nil
+	}
+	html, err = HTML(doc, WithHook("chess", board))
+
+	// Read the tree: one Go type per node kind, behind the Node interface.
+	Walk(doc, func(n Node) WalkStatus {
+		switch n := n.(type) {
+		case *Heading:
+			fmt.Println("heading", n.Level, n.ID)
+		case *Link:
+			if n.Destination != nil {
+				fmt.Println("link to", *n.Destination)
+			}
+		case *CodeBlock:
+			return WalkSkipChildren // a leaf; shown for the skip
+		}
+		return WalkContinue
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "<chess-board fen=\"abc\"></chess-board>\n"; !strings.Contains(string(html), want) {
+		t.Errorf("HTML with the hook lacks %q:\n%s", want, html)
 	}
 }

@@ -28,16 +28,16 @@ func TestJSONRoundTrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
-				var back Node
-				if err := json.Unmarshal(data, &back); err != nil {
+				back, err := UnmarshalNode(data)
+				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
-				want, got := string(ASTText(doc)), string(ASTText(&back))
+				want, got := string(ASTText(doc)), string(ASTText(back))
 				if got != want {
 					t.Errorf("%s:%d (positions=%v)\n---before---\n%s---after---\n%s", file, c.line, len(opts) > 0, want, got)
 				}
 				wantHTML, _ := HTML(doc)
-				gotHTML, _ := HTML(&back)
+				gotHTML, _ := HTML(back)
 				if string(gotHTML) != string(wantHTML) {
 					t.Errorf("%s:%d (positions=%v) HTML\n---before---\n%s---after---\n%s", file, c.line, len(opts) > 0, wantHTML, gotHTML)
 				}
@@ -63,16 +63,16 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var back Node
-		if err := json.Unmarshal(data, &back); err != nil {
+		back, err := UnmarshalNode(data)
+		if err != nil {
 			t.Fatal(err)
 		}
 		want, _ := HTML(doc)
-		got, _ := HTML(&back)
+		got, _ := HTML(back)
 		if string(got) != string(want) {
 			t.Errorf("%q: HTML through JSON\n got %s\nwant %s", src, got, want)
 		}
-		if w, g := string(Djot(doc)), string(Djot(&back)); g != w {
+		if w, g := string(Djot(doc)), string(Djot(back)); g != w {
 			t.Errorf("%q: Djot through JSON\n got %q\nwant %q", src, g, w)
 		}
 	}
@@ -85,18 +85,18 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 	}
 }
 
-// checkSourceOnlyOnQuotes fails unless every node with a Source is a Str
-// holding one smart-quote glyph written as ' or ".
-func checkSourceOnlyOnQuotes(t *testing.T, where string, n *Node) {
+// checkSourceOnlyOnQuotes fails unless every text node with a Source holds
+// one smart-quote glyph written as ' or ". (Only a text node has a Source.)
+func checkSourceOnlyOnQuotes(t *testing.T, where string, doc Node) {
 	t.Helper()
-	if n.Source != "" {
-		single := n.Source == "'" && (n.Text == "‘" || n.Text == "’")
-		double := n.Source == "\"" && (n.Text == "“" || n.Text == "”")
-		if n.Tag != Str || !single && !double {
-			t.Errorf("%s: Source %q on %v %q", where, n.Source, n.Tag, n.Text)
+	Walk(doc, func(n Node) WalkStatus {
+		if n, ok := n.(*Str); ok && n.Source != "" {
+			single := n.Source == "'" && (n.Text == "‘" || n.Text == "’")
+			double := n.Source == "\"" && (n.Text == "“" || n.Text == "”")
+			if !single && !double {
+				t.Errorf("%s: Source %q on str %q", where, n.Source, n.Text)
+			}
 		}
-	}
-	for _, c := range n.Children {
-		checkSourceOnlyOnQuotes(t, where, c)
-	}
+		return WalkContinue
+	})
 }

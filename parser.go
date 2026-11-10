@@ -244,7 +244,7 @@ type containerData struct {
 	attrParser *attrParser
 	attrFailed attrFailure
 	list       listData
-	checked    *bool
+	checked    bool
 	// footnote and reference definition: the normalized label.
 	label string
 	fence fenceInfo
@@ -256,13 +256,13 @@ type containerData struct {
 	// table: the alignments the last separator row gave, and the row on
 	// the line before, which a separator row makes a header row.
 	aligns    []CellAlign
-	rowBefore *Node
+	rowBefore *Row
 }
 
 type container struct {
 	kind     kind
 	start    SourcePos
-	children []*Node
+	children []Node
 	// pendingAttrs are block attributes waiting for this container's next
 	// child block.
 	pendingAttrs *blockAttrs
@@ -283,7 +283,7 @@ type stackParser struct {
 	// pendingAttrs are block attributes waiting for the next top-level
 	// block.
 	pendingAttrs *blockAttrs
-	blocks       []*Node
+	blocks       []Node
 	// The open leaf's lines; the leaf is always the tip.
 	leafSlices      []string
 	leafStarts      []leafStart
@@ -307,14 +307,16 @@ type stackParser struct {
 // parseStack parses input with the container stack into the whole document
 // tree: the root Section that Parse returns, and whether the nesting limit
 // stopped a block or an inline from nesting.
-func parseStack(input string, trackPos bool) (doc *Node, tooDeep bool) {
+func parseStack(input string, trackPos bool) (doc *Section, tooDeep bool) {
 	p := &stackParser{lines: splitLines(input), doc: newDocument(trackPos), trackPos: trackPos, leafLastNewline: true}
 	blocks := p.parseAll()
 	var end *SourcePos
 	if trackPos {
 		e := inputEnd(p.lines)
-		if p.lineCount <= p.lastBlockLine && len(blocks) > 0 && blocks[len(blocks)-1].Pos != nil {
-			e = blocks[len(blocks)-1].Pos.End
+		if p.lineCount <= p.lastBlockLine && len(blocks) > 0 {
+			if pos := blocks[len(blocks)-1].header().Pos; pos != nil {
+				e = pos.End
+			}
 		}
 		end = &e
 	}
@@ -323,7 +325,7 @@ func parseStack(input string, trackPos bool) (doc *Node, tooDeep bool) {
 
 // parseAll runs every line through parseLine and closes what is open at
 // the end.
-func (p *stackParser) parseAll() []*Node {
+func (p *stackParser) parseAll() []Node {
 	for _, l := range p.lines {
 		p.lineCount++
 		p.parseLine(l)
@@ -562,7 +564,7 @@ type stackMarker struct {
 	ordered orderedStyles
 	delim   delim
 	advance int
-	checked *bool
+	checked bool
 	text    string
 	m       marker
 }
@@ -575,8 +577,7 @@ func listMarker(rest string) (stackMarker, bool) {
 	if m, ok := parseBulletMarker(rest); ok {
 		width := len(rest) - len(m.rest)
 		if isTaskItem(m.rest) {
-			checked := m.rest[1] != ' '
-			return stackMarker{kind: listTask, bullet: m.bullet, advance: width + 3, checked: &checked, text: m.markerText, m: m}, true
+			return stackMarker{kind: listTask, bullet: m.bullet, advance: width + 3, checked: m.rest[1] != ' ', text: m.markerText, m: m}, true
 		}
 		return stackMarker{kind: listBullet, bullet: m.bullet, advance: 1, text: m.markerText, m: m}, true
 	}
@@ -793,6 +794,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		if row := c.data.rowBefore; row != nil {
 			row.Head = true
 			for i, cell := range row.Children {
+				cell := cell.(*Cell)
 				cell.Head = true
 				cell.Align = alignAt(aligns, i)
 			}
@@ -800,7 +802,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		c.data.rowBefore = nil
 		return
 	}
-	row := &Node{Tag: Row}
+	row := &Row{}
 	// Each cell's text starts after the pipe before it; the cells are
 	// contiguous, one pipe apart.
 	off := cur.i + 1
@@ -812,7 +814,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		}
 		// No line end follows a cell: its trailing tab is content.
 		children, _ := p.leafInlines(0, false)
-		cell := &Node{Tag: Cell, Children: children, Align: alignAt(c.data.aligns, i)}
+		cell := &Cell{Children: children, Align: alignAt(c.data.aligns, i)}
 		row.Children = append(row.Children, p.spanned(cell, cur.at(off-1), cur.at(off+len(text))))
 		off += len(text) + 1
 	}
@@ -973,21 +975,23 @@ func (p *stackParser) dropLeaf() {
 // from; it empties the leaf buffers. endsLine says whether a line end
 // follows the text (a cell's does not). The ids it holds are registered:
 // those of inline attributes left on no node first, then the tree's.
-func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]*Node, string) {
+func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]Node, string) {
 	defer p.dropLeaf()
 	src := strings.Join(p.leafSlices, "\n")
 	if src == "" {
 		return nil, ""
 	}
-	nodes, dropped, deep := parseLeafInlines(src, attrsFrom, endsLine)
+	var lm *lineMap
+	if p.trackPos {
+		m := p.leafLineMap()
+		lm = &m
+	}
+	nodes, dropped, deep := parseLeafInlines(src, attrsFrom, endsLine, lm)
 	p.tooDeep = p.tooDeep || deep
 	for _, id := range dropped {
 		p.doc.ids.register(id)
 	}
 	p.doc.ids.registerTree(nodes)
-	if p.trackPos {
-		applyInlinePositions(nodes, p.leafLineMap())
-	}
 	return nodes, src
 }
 
@@ -1007,25 +1011,31 @@ func (p *stackParser) leafText() string {
 	return text
 }
 
-// leafNode is a paragraph, heading or caption over the open leaf.
-func (p *stackParser) leafNode(c *container, tag Tag, level, attrsFrom int, s stand) *Node {
-	children, _ := p.leafInlines(attrsFrom, true)
-	n := &Node{Tag: tag, Level: level, Children: children}
+// leafChildren is the inlines of the open leaf, which a paragraph, heading
+// or caption c holds, and the leaf's range when positions are tracked.
+func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (children []Node, pos *Range) {
+	children, _ = p.leafInlines(attrsFrom, true)
 	if p.trackPos {
-		n.Pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
+		pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
 	}
-	return n
+	return children, pos
+}
+
+// leafPara is a paragraph over the open leaf.
+func (p *stackParser) leafPara(c *container, attrsFrom int, s stand) *Para {
+	children, pos := p.leafChildren(c, attrsFrom, s)
+	return &Para{Header: Header{Pos: pos}, Children: children}
 }
 
 // leafEnd is where a paragraph, heading or caption ends: a caption one
 // before where the parser stands; the others after their last byte that is
 // not a trailing space or, ending in a hard break, at the next line's first
 // byte (a heading's first bare '#' line).
-func leafEnd(c *container, children []*Node, s stand) SourcePos {
+func leafEnd(c *container, children []Node, s stand) SourcePos {
 	if c.kind == kindCaption {
 		return s.before
 	}
-	if n := len(children); n > 0 && children[n-1].Tag == HardBreak {
+	if _, ok := lastNode(children).(*HardBreak); ok {
 		if c.kind == kindHeading && c.data.bareAt != nil {
 			return *c.data.bareAt
 		}
@@ -1059,10 +1069,18 @@ func (p *stackParser) closeFrom(from int, s stand) {
 	}
 }
 
+// lastNode is the last of nodes, or nil.
+func lastNode(nodes []Node) Node {
+	if len(nodes) == 0 {
+		return nil
+	}
+	return nodes[len(nodes)-1]
+}
+
 // spanned sets n's range when positions are tracked.
-func (p *stackParser) spanned(n *Node, start, end SourcePos) *Node {
+func (p *stackParser) spanned(n Node, start, end SourcePos) Node {
 	if p.trackPos {
-		n.Pos = &Range{Start: start, End: end}
+		n.header().Pos = &Range{Start: start, End: end}
 	}
 	return n
 }
@@ -1075,7 +1093,7 @@ func (p *stackParser) close(s stand) {
 	p.listEvent(t.kind == kindList, t.kind == kindListItem)
 	p.stack = p.stack[:len(p.stack)-1]
 	c := t
-	var n *Node
+	var n Node
 	switch c.kind {
 	case kindPara:
 		// A failed attribute block that a line turned into a paragraph takes
@@ -1086,17 +1104,19 @@ func (p *stackParser) close(s stand) {
 				p.doc.ids.register(ba.id)
 			}
 		}
-		n = p.leafNode(c, Para, 0, c.data.attrsFrom, s)
+		n = p.leafPara(c, c.data.attrsFrom, s)
 	case kindHeading:
 		// Its inline ids are registered first, then the heading's own.
-		n = p.leafNode(c, Heading, c.data.level, 0, s)
+		children, pos := p.leafChildren(c, 0, s)
+		h := &Heading{Header: Header{Pos: pos}, Level: c.data.level, Children: children}
 		explicit := ""
 		if ba := *p.attrsSlot(); ba != nil {
 			explicit = ba.id
 		}
-		p.doc.ids.heading(n, explicit)
+		p.doc.ids.heading(h, explicit)
+		n = h
 	case kindThematicBreak:
-		n = p.spanned(&Node{Tag: ThematicBreak}, c.start, *c.data.end)
+		n = p.spanned(&ThematicBreak{}, c.start, *c.data.end)
 	case kindAttributes:
 		slot := p.attrsSlot()
 		if a := c.data.attrs; a != nil {
@@ -1119,9 +1139,9 @@ func (p *stackParser) close(s stand) {
 		if ba := *slot; ba != nil {
 			p.doc.ids.register(ba.id)
 		}
-		n = p.leafNode(c, Para, 0, p.failedAttrsFrom(), s)
+		n = p.leafPara(c, p.failedAttrsFrom(), s)
 	case kindBlockQuote:
-		n = p.spanned(&Node{Tag: BlockQuote, Children: c.children}, c.start, s.pos)
+		n = p.spanned(&BlockQuote{Children: c.children}, c.start, s.pos)
 	case kindFootnote:
 		// Recorded for the document, with the block attributes waiting
 		// before it.
@@ -1139,7 +1159,7 @@ func (p *stackParser) close(s stand) {
 		if c.data.end != nil {
 			end = *c.data.end
 		}
-		div := &Node{Tag: Div, Children: c.children}
+		div := &Div{Children: c.children}
 		if c.data.class != "" {
 			div.Attrs = []Attr{{"class", c.data.class}}
 		}
@@ -1152,9 +1172,9 @@ func (p *stackParser) close(s stand) {
 		}
 		lang := c.data.fence.lang
 		if strings.HasPrefix(lang, "=") {
-			n = &Node{Tag: RawBlock, Text: text, Lang: lang[1:]}
+			n = &RawBlock{Format: lang[1:], Text: text}
 		} else {
-			n = &Node{Tag: CodeBlock, Text: text, Lang: lang}
+			n = &CodeBlock{Lang: lang, Text: text}
 		}
 		p.spanned(n, c.start, end)
 	case kindReferenceDefinition:
@@ -1177,8 +1197,8 @@ func (p *stackParser) close(s stand) {
 		n = p.spanned(p.itemNode(c), c.start, s.before)
 	case kindTable:
 		// djot.js gives every table a caption, empty until one follows it.
-		children := append([]*Node{{Tag: Caption}}, c.children...)
-		n = p.spanned(&Node{Tag: Table, Children: children}, c.start, s.pos)
+		children := append([]Node{&Caption{}}, c.children...)
+		n = p.spanned(&Table{Children: children}, c.start, s.pos)
 	case kindCaption:
 		p.closeCaption(c, s)
 		return
@@ -1188,7 +1208,7 @@ func (p *stackParser) close(s stand) {
 
 // closeAs appends n, with the block attributes waiting for it, to its
 // parent's children or the top-level blocks.
-func (p *stackParser) closeAs(n *Node, s stand) {
+func (p *stackParser) closeAs(n Node, s stand) {
 	slot := p.attrsSlot()
 	if ba := *slot; ba != nil {
 		applyBlockAttrs(n, *ba)
@@ -1215,7 +1235,8 @@ func (p *stackParser) closeAs(n *Node, s stand) {
 // dropped. Its ids, and the waiting attributes' id, were registered either
 // way.
 func (p *stackParser) closeCaption(c *container, s stand) {
-	n := p.leafNode(c, Caption, 0, 0, s)
+	children, pos := p.leafChildren(c, 0, s)
+	n := &Caption{Header: Header{Pos: pos}, Children: children}
 	slot := p.attrsSlot()
 	ba := *slot
 	*slot = nil
@@ -1234,36 +1255,34 @@ func (p *stackParser) closeCaption(c *container, s stand) {
 
 // tableBefore is the last sibling, if a table: the table a caption closing
 // now joins.
-func (p *stackParser) tableBefore() *Node {
+func (p *stackParser) tableBefore() *Table {
 	siblings := p.blocks
 	if len(p.stack) > 0 {
 		siblings = p.tip().children
 	}
-	if n := len(siblings); n > 0 && siblings[n-1].Tag == Table {
-		return siblings[n-1]
-	}
-	return nil
+	t, _ := lastNode(siblings).(*Table)
+	return t
 }
 
 // listNodeOf is the node a closing list makes: a bullet or task list with
 // its tightness and first bullet, an ordered list with djot.js's style
 // (the style it settled on, in its delimiter) and its first marker's text,
 // from which its start is read, or a definition list.
-func (p *stackParser) listNodeOf(c *container) *Node {
+func (p *stackParser) listNodeOf(c *container) Node {
 	l := c.data.list
 	switch l.style {
 	case listTask:
-		return &Node{Tag: TaskList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
+		return &TaskList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 	case listDefinition:
-		return &Node{Tag: DefinitionList, Children: c.children}
+		return &DefinitionList{Children: c.children}
 	case listOrdered:
 		style := styleDecimal
 		if len(l.ordered.possible) > 0 {
 			style = l.ordered.possible[0]
 		}
-		return &Node{Tag: OrderedList, Children: c.children, Tight: l.tight, Style: styleString(style, l.delim), Text: l.markerText}
+		return &OrderedList{Style: styleString(style, l.delim), Marker: l.markerText, Tight: l.tight, Children: c.children}
 	}
-	return &Node{Tag: BulletList, Children: c.children, Tight: l.tight, Style: string(rune(l.bullet))}
+	return &BulletList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 }
 
 // itemNode is the node a closing item makes; its list is the tip. A
@@ -1271,17 +1290,19 @@ func (p *stackParser) listNodeOf(c *container) *Node {
 // and the rest as the definition. Only the paragraph's inlines move, so a
 // block attribute on it (its id already registered) is not on the Term:
 // today's tree, which the corpus does not cover.
-func (p *stackParser) itemNode(c *container) *Node {
+func (p *stackParser) itemNode(c *container) Node {
 	switch p.tip().data.list.style {
 	case listTask:
-		return &Node{Tag: TaskListItem, Children: c.children, Checked: c.data.checked}
+		return &TaskListItem{Checked: c.data.checked, Children: c.children}
 	case listDefinition:
-		term, blocks := &Node{Tag: Term}, c.children
-		if len(blocks) > 0 && blocks[0].Tag == Para {
-			term.Children = blocks[0].Children
-			blocks = blocks[1:]
+		term, blocks := &Term{}, c.children
+		if len(blocks) > 0 {
+			if para, ok := blocks[0].(*Para); ok {
+				term.Children = para.Children
+				blocks = blocks[1:]
+			}
 		}
-		return &Node{Tag: DefinitionListItem, Children: []*Node{term, {Tag: Definition, Children: blocks}}}
+		return &DefinitionListItem{Children: []Node{term, &Definition{Children: blocks}}}
 	}
-	return &Node{Tag: ListItem, Children: c.children}
+	return &ListItem{Children: c.children}
 }

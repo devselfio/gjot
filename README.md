@@ -66,25 +66,53 @@ doc := gjot.Parse([]byte("Hello *world*"))
 html, err := gjot.HTML(doc)
 
 // Render fenced divs of a class yourself: `::: chess {fen=...}`
-board := func(w io.Writer, n *gjot.Node, entering bool) (gjot.WalkStatus, error) {
+board := func(w io.Writer, n gjot.Node, entering bool) (gjot.WalkStatus, error) {
 	if entering {
 		fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
 	}
 	return gjot.WalkSkipChildren, nil
 }
 html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
+
+// Read the tree: one Go type per node kind, behind the Node interface.
+gjot.Walk(doc, func(n gjot.Node) gjot.WalkStatus {
+	switch n := n.(type) {
+	case *gjot.Heading:
+		fmt.Println("heading", n.Level, n.ID)
+	case *gjot.Link:
+		if n.Destination != nil {
+			fmt.Println("link to", *n.Destination)
+		}
+	case *gjot.CodeBlock:
+		return gjot.WalkSkipChildren // a leaf; shown for the skip
+	}
+	return gjot.WalkContinue
+})
 ```
+
+The tree is shaped as `go/ast`'s: `Node` is an interface, and each kind of
+node is its own struct (`*gjot.Para`, `*gjot.Str`, `*gjot.Link`, ... the 49
+kinds `Parse` produces, named as djot.js's tags are: `bullet_list` is
+`BulletList`) carrying only the fields that kind has. Every kind embeds a
+`Header` with the node's `ID`, `Attrs` and `Pos`, so `n.Attr`, `n.HasClass`
+and `n.Tag()` (the djot.js tag, as `ASTText` and the JSON print it) work on
+any `Node`. The root `Parse` returns is a `*gjot.Section` of `Level` 0.
+Containers hold `Children []Node`; `Walk` visits a node, then its children in
+order, the footnote definitions after the body. A hook is called with a
+`*gjot.Div` or a `*gjot.Span`.
 
 | Function | Description |
 | --- | --- |
-| `Parse(src []byte, opts ...ParseOption) *Node` | Parse Djot into an AST. Never fails: every input is a document. Blocks nest at most `MaxNesting` (1,000) containers deep and a leaf's inlines at most `MaxNesting` deep; a marker that would nest deeper is text |
-| `ParseErr(src []byte, opts ...ParseOption) (*Node, error)` | `Parse` that also returns `ErrTooDeep` when the limit stopped nesting; the tree is the same |
-| `WithSourcePos() ParseOption` | Record each node's source range in `Node.Pos` |
-| `HTML(doc *Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
-| `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h`; `WalkSkipChildren` drops the default child rendering |
-| `ASTText(doc *Node) []byte` | Render the AST in djot.js's indented text format |
-| `Djot(doc *Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
-| `(*Node).HasClass(string) bool`, `(*Node).Attr(string) string` | Class and attribute lookup for hooks |
+| `Parse(src []byte, opts ...ParseOption) Node` | Parse Djot into an AST, whose root is a `*Section` of level 0. Never fails: every input is a document. Blocks nest at most `MaxNesting` (1,000) containers deep and a leaf's inlines at most `MaxNesting` deep; a marker that would nest deeper is text |
+| `ParseErr(src []byte, opts ...ParseOption) (Node, error)` | `Parse` that also returns `ErrTooDeep` when the limit stopped nesting; the tree is the same |
+| `WithSourcePos() ParseOption` | Record each node's source range in its `Header.Pos` |
+| `HTML(doc Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
+| `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h func(w io.Writer, n Node, entering bool) (WalkStatus, error)`; `WalkSkipChildren` drops the default child rendering |
+| `ASTText(doc Node) []byte` | Render the AST in djot.js's indented text format |
+| `Djot(doc Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
+| `Walk(n Node, visit func(Node) WalkStatus)` | Visit `n` and its descendants in document order; `WalkSkipChildren` skips a node's children |
+| `UnmarshalNode(data []byte) (Node, error)` | Decode the JSON form of a node of any kind, switching on `"tag"` |
+| `HasClass(string) bool`, `Attr(string) string`, `Tag() Tag` | On every node (`HasClass` and `Attr` through its `Header`): class and attribute lookup, and the djot.js tag name |
 
 The nesting limit bounds the tree: it is never deeper than about twice
 `MaxNesting` plus a few levels for leaves, table rows and sections, which
@@ -98,17 +126,27 @@ in one paragraph also report `ErrTooDeep`, though nothing nests. Where zjot
 returns `error.TooDeep` and no document, gjot returns the tree; check
 `errors.Is(err, gjot.ErrTooDeep)` from `ParseErr` to reject or flag such input.
 
-`Node` carries `encoding/json` struct tags; `json.Marshal(doc)` round-trips
-through `json.Unmarshal` to the same AST text and HTML. A smart quote keeps the
-quote it was written as in `"source"` (`Node.Source`, empty on every other
-node), which alt text, heading ids and the writer read. An ordered list keeps
-djot.js's style in `"style"` (`"1."`, `"(a)"`, `"I)"`) and its first marker's
-text in `"text"`, from which the HTML `start` is read. Source positions are kept only
-when parsed with `WithSourcePos`. Blocks carry them at any nesting depth, as do
-the inline nodes inside them. A definition list item's term and definition
-carry none, as zjot's AST prints none. Footnote definitions stand after the
-document's blocks as `footnote` nodes with their label in `"text"`; the HTML
-renderer numbers the endnotes from them.
+Every kind marshals itself: `json.Marshal(doc)` writes one object per node,
+its kind in `"tag"` and only the fields it has, byte for byte the JSON that
+gjot wrote before the tree had a type per kind (the field names and the
+`"tag"` discriminator are unchanged, so documents marshalled then decode
+now). `gjot.UnmarshalNode(data)` decodes a node of any kind, switching on
+`"tag"`; `json.Unmarshal` into a concrete kind (`var sec gjot.Section` for a
+whole document) works too, and fails if the JSON is of another kind. The
+JSON round-trips to the same AST text and HTML. A smart quote keeps the
+quote it was written as in `"source"` (`Str.Source`, empty on every other
+text node), which alt text, heading ids and the writer read. An ordered list
+keeps djot.js's style in `"style"` (`"1."`, `"(a)"`, `"I)"`) and its first
+marker's text in `"text"` (`OrderedList.Style` and `OrderedList.Marker`),
+from which the HTML `start` is read. Where a Go field's name differs from
+its wire key, the wire key stays: `Footnote.Label`, `FootnoteReference.Label`
+and `Symb.Alias` are `"text"`, and `RawBlock.Format` and `RawInline.Format`
+are `"lang"`. Source positions are kept only when parsed with
+`WithSourcePos`. Blocks carry them at any nesting depth, as do the inline
+nodes inside them. A definition list item's term and definition carry none,
+as zjot's AST prints none. Footnote definitions stand after the document's
+blocks as `footnote` nodes with their label in `"text"`; the HTML renderer
+numbers the endnotes from them.
 
 One thing the writer cannot express, because the syntax has no form for it: an
 empty verbatim or math span in the middle of a paragraph (it is written as a
@@ -144,6 +182,12 @@ go test -run 'TestSpec$' -v . | grep 'corpus:'
 
 `TestJSONRoundTrip` marshals every case's AST to JSON and back and compares the
 AST text and the HTML, with and without source positions.
+`TestTreeJSONIdentical` pins the wire form to the JSON gjot wrote before the
+tree had a type per kind, and checks that every case's JSON decodes to a tree
+that encodes to the same bytes.
+`TestWriterRoundTripWithSourcePos` checks that a tree parsed with source
+positions is written byte for byte as one parsed without them, and reads back
+to the source's HTML, over every case and the bench page.
 
 `make spec-drift` (or `go run ./cmd/driftcheck`) checks that corpus against the
 tag pinned in `ORIGIN.md`, which must be a `vN.N.N` tag, never a branch.
@@ -191,8 +235,49 @@ file is committed and the benchmark reads it; `TestBenchPageCurrent` fails
 unless it is the generator's output byte for byte, and
 `go test -run TestBenchPageCurrent -write-bench-page .` rewrites it.
 
-`go test -v -run TestNodeSize .` prints the size of `Node`; today it prints
-`Node is 272 bytes (unsafe.Sizeof)`.
+`go test -v -run TestNodeSize .` prints the size of every node kind and, on a
+64-bit platform, fails if a common kind (`Str`, `Para`, `Emph`, `Strong`,
+`Link`, `Image`, `Heading`, `Section`, `ListItem`, `BulletList`, `Span`,
+`Verbatim`) is 100 bytes or more. Today the kinds are 48 to 112 bytes: `Str`
+88, `Para` and `Emph` 72, `Link` 96, `OrderedList` 112 (the one kind over
+100). The single `Node` struct they replaced was 272 bytes for every node.
+
+With a type per kind, from one `make bench` run at commit
+22c973a07e698b4471d8fb249aef54ddf378caf0 (the per-kind tree, swarm-gridapp#8),
+same machine as below:
+
+Corpus (an op is 1066 cases, 8,025 nodes):
+
+| Path       |      ns/op | ns/case | allocs/node | B/node |
+|------------|-----------:|--------:|------------:|-------:|
+| Parse      | 11,061,356 |  10,377 |       5.799 |  576.4 |
+| HTML       |  1,915,792 |   1,797 |      0.8273 |  52.33 |
+| ASTTextPos |  2,599,515 |   2,439 |      0.7767 |  84.63 |
+| Djot       |  7,860,847 |   7,374 |       5.659 |  175.3 |
+| JSON       | 33,372,764 |  31,307 |       6.272 |  658.4 |
+
+Page (an op is 1 case, 6,160 nodes):
+
+| Path       |      ns/op |    ns/case | allocs/node | B/node |
+|------------|-----------:|-----------:|------------:|-------:|
+| Parse      |  6,567,603 |  6,567,603 |       3.181 |  506.2 |
+| HTML       |  1,306,543 |  1,306,543 |     0.04383 |  87.00 |
+| ASTTextPos |  2,989,972 |  2,989,972 |    0.004714 |  321.6 |
+| Djot       | 17,231,027 | 17,231,027 |       6.424 |  280.2 |
+| JSON       | 23,329,655 | 23,329,655 |       4.038 |  870.2 |
+
+Against the single-struct tree (50a3232), `benchstat` over ten interleaved
+`-count 1` runs of each on that machine found no `sec/op` change at p<0.05 on
+any corpus path or on the page's `Parse`, `HTML`, `ASTTextPos` or `JSON`, with
+every sample varying ±30 to 50%, and `Page/Djot` +51% (p=0.043; allocations
++0.3%, so likely noise, unconfirmed). Parsing allocates 22% fewer bytes
+(corpus 5.66 to 4.41 MiB, page 3.87 to 2.97 MiB). `JSON` allocates 71%
+(corpus) and 128% (page) more bytes, and on the page measured alone is slower:
+`json.Marshal` 11.2 ms against 7.1 ms, because `encoding/json` re-scans and
+compacts the bytes a `MarshalJSON` returns (the encoder itself takes 2 ms),
+and decoding 24.5 ms against 21.0 ms, through an intermediate tree.
+
+#7's numbers, for the single `Node` struct:
 
 Corpus (an op is 1066 cases, 8,025 nodes):
 
@@ -239,7 +324,9 @@ after the pass.
 
 ```
 gjot.go          Public API: Parse, ParseErr, MaxNesting, WithSourcePos, HTML
-node.go          AST types (Node, Tag, Attr, SourcePos, Range) and hook helpers
+node.go          AST types: the Node interface, Header, one struct per kind, Tag, Attr, SourcePos, Range
+walk.go          Walk, and each kind's children
+json.go          The JSON form: per-kind MarshalJSON, UnmarshalNode
 parser.go        Block parsing: the container stack over lines
 leaf.go          What one line says (fences, markers, table rows, ...)
 document.go      Definitions, ids, references, sections, footnotes
@@ -265,3 +352,45 @@ cmd/driftcheck   Corpus drift check against zjot
   never set. A node's classes are its `class` entry in `Attrs`, read by
   `HasClass`. `json.Unmarshal` now ignores a `classes` key in a `Node`
   document; gjot never wrote one.
+- 2026-11-10. The AST has a Go type per node kind, as `go/ast` does
+  (swarm-gridapp#8). `Node` is now an interface, with an unexported method,
+  implemented by one struct per kind `Parse` produces: `Section`, `Heading`,
+  `Para`, `ThematicBreak`, `CodeBlock`, `RawBlock`, `BlockQuote`, `Div`,
+  `BulletList`, `TaskList`, `OrderedList`, `DefinitionList`, `ListItem`,
+  `TaskListItem`, `DefinitionListItem`, `Term`, `Definition`, `Table`,
+  `Caption`, `Row`, `Cell`, `Footnote`, `Str`, `SoftBreak`, `HardBreak`,
+  `NonBreakingSpace`, `Emph`, `Strong`, `Span`, `Mark`, `Superscript`,
+  `Subscript`, `Insert`, `Delete`, `DoubleQuoted`, `SingleQuoted`,
+  `Verbatim`, `InlineMath`, `DisplayMath`, `RawInline`, `URL`, `Email`,
+  `FootnoteReference`, `Symb`, `Link`, `Image`, `Ellipsis`, `EmDash`,
+  `EnDash`. Each embeds a `Header` (`ID`, `Attrs`, `Pos`) and carries only
+  its own fields; `HasClass` and `Attr` are on `Header`, so on every node.
+  - Removed: the `*Node` struct and its fields, and the 49 `Tag` constants,
+    whose names the kinds now take. `n.Tag` (a field) is `n.Tag()` (a method
+    returning the same djot.js name); the `Tag` type stays.
+  - Moved: `Children` is on the kinds that have children, as `[]Node`;
+    `Level` on `Heading` and `Section`; `AutoID` on `Heading` and `Section`
+    only; `Text` on `Str`, `CodeBlock`, `RawBlock`, `Verbatim`,
+    `InlineMath`, `DisplayMath`, `RawInline`, `URL` and `Email`; `Lang` on
+    `CodeBlock`; `Style` and `Tight` on the lists; `Head` on `Row` and
+    `Cell`, `Align` on `Cell`; `Destination` and `Reference` on `Link` and
+    `Image`; `Source` on `Str`.
+  - Renamed: an ordered list's first marker `Text` is `OrderedList.Marker`; a
+    footnote's and a footnote reference's label `Text` is `Label`; a
+    symbol's `Text` is `Symb.Alias`; a raw block's or raw inline's `Lang` is
+    `Format`. `TaskListItem.Checked` is a `bool` (it was a `*bool` the
+    parser always set). A link's `Text`, which `Parse` never set and only
+    `HTML` read for a link without children, is gone.
+  - Signatures: `Parse` and `ParseErr` return `Node` (a `*Section`);
+    `HTML`, `ASTText` and `Djot` take `Node`; a `Hook` is
+    `func(w io.Writer, n Node, entering bool) (WalkStatus, error)` and is
+    called with a `*Div` or `*Span`.
+  - Added: `Walk(n Node, visit func(Node) WalkStatus)`, and
+    `UnmarshalNode(data []byte) (Node, error)` to decode a node of any kind
+    (`json.Unmarshal` cannot fill an interface).
+  - Unchanged: the JSON form, byte for byte, its field names and its
+    `"tag"` discriminator included, though `json.Marshal(doc)` is slower (see
+    Benchmarks); `json.Unmarshal` into a `*Section`
+    decodes a document. A hook or a consumer that read `n.Tag` and fields
+    now type-switches: `switch n := n.(type) { case *gjot.Heading: ... }`
+    (see Library usage).
