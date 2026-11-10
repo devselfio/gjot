@@ -35,7 +35,7 @@ func WithHook(class string, h Hook) HTMLOption {
 	}
 }
 
-// renderer writes a Node tree as HTML into out. The first hook error stops
+// renderer writes the tree as HTML into out. The first hook error stops
 // all further output.
 type renderer struct {
 	out   []byte
