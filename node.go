@@ -143,13 +143,7 @@ type Node struct {
 	// off is the offset of Text in the inline source it was sliced from,
 	// plus one; 0 means Text is not a slice of it. Parse-time only.
 	off int
-	// src is the node's extent in the inline source. Parse-time only.
-	src srcSpan
 }
-
-// srcSpan is a byte range [start, end) in the inline source a node was
-// parsed from; end == 0 means the node has none.
-type srcSpan struct{ start, end int }
 
 // writtenID is the id written on the node and whether one was, an empty
 // `id=""` included.

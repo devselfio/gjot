@@ -42,7 +42,8 @@ func ParseErr(src []byte, opts ...ParseOption) (*Node, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	doc, tooDeep := parseStack(string(src), cfg.sourcePos)
+	tree, tooDeep := parseStack(string(src), cfg.sourcePos)
+	doc := toLegacy(tree)
 	if tooDeep {
 		return doc, ErrTooDeep
 	}

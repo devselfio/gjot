@@ -54,17 +54,19 @@ func (m lineMap) rangeOf(start, end int) *Range {
 	return &Range{Start: m.resolve(start), End: m.resolve(end - 1)}
 }
 
-// applyInlinePositions sets positions on inline nodes at any depth: a text
-// slice from its offset and length, any other node from the extent the
-// inline parser recorded for it.
-func applyInlinePositions(nodes []*Node, m lineMap) {
+// applyStrPositions sets the position of every text slice among the inline
+// nodes, at any depth, from its offset and length, once the leaf is parsed
+// and its text final. Every other inline node had its position set as it
+// was made (inlineParser.at), a literal text node's (a smart quote's)
+// included.
+func applyStrPositions(nodes []treeNode, m *lineMap) {
 	for _, n := range nodes {
-		switch {
-		case n.Tag == Str && n.off > 0:
-			n.Pos = m.rangeOf(n.off-1, n.off-1+len(n.Text))
-		case n.src.end > 0:
-			n.Pos = m.rangeOf(n.src.start, n.src.end)
+		if s, ok := n.(*treeStr); ok {
+			if s.off > 0 {
+				s.Pos = m.rangeOf(s.off-1, s.off-1+len(s.Text))
+			}
+			continue
 		}
-		applyInlinePositions(n.Children, m)
+		applyStrPositions(childrenOf(n), m)
 	}
 }

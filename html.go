@@ -508,7 +508,7 @@ func (r *renderer) wrap(tag string, n treeNode) {
 }
 
 func (r *renderer) altText(children []treeNode) {
-	r.attrEsc(treeStringContent(children, true))
+	r.attrEsc(stringContent(children, true))
 }
 
 // listItems writes a list's items with tight in force below them.

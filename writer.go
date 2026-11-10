@@ -518,7 +518,7 @@ func explicitID(n treeNode) string {
 // numbers headings out of order) explicit is set and the caller writes the
 // id on the heading.
 func (d *djotWriter) headingID(n *treeHeading) (carriers string, explicit bool) {
-	text := treeStringContent(n.Children, false)
+	text := stringContent(n.Children, false)
 	if n.ID == "" {
 		d.ids.generate(text)
 		return "", false
@@ -608,7 +608,7 @@ func (c *idClaims) collect(n treeNode) {
 		}
 	case *treeHeading:
 		if n.AutoID && n.ID != "" {
-			if g, ok := idTarget(treeStringContent(n.Children, false), n.ID); ok {
+			if g, ok := idTarget(stringContent(n.Children, false), n.ID); ok {
 				c.generated = append(c.generated, g)
 			}
 		}
