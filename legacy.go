@@ -5,12 +5,24 @@ package gjot
 // fields. A task list item's nil Checked reads as false; AutoID is kept on
 // headings and sections only. This file goes when the parser builds the new
 // tree directly.
-func fromLegacy(n *Node) treeNode {
+func fromLegacy(n *Node) treeNode { return fromLegacyLinks(n, nil) }
+
+// linkTexts holds the Text of each childless link that had one in the old
+// tree, which the new link has no field for. HTML renders it in place of
+// the children, as it did before the renderers read the new tree, and
+// toLegacy hands it back to the hooks; ASTText and Djot never read a link's
+// Text. Parse never sets it, so the map stays nil for a parsed document.
+// It goes with this file.
+type linkTexts map[*treeLink]string
+
+// fromLegacyLinks is fromLegacy, recording into *texts, when texts is not
+// nil, the Text of every childless link that has one.
+func fromLegacyLinks(n *Node, texts *linkTexts) treeNode {
 	var children []treeNode
 	if len(n.Children) > 0 {
 		children = make([]treeNode, len(n.Children))
 		for i, c := range n.Children {
-			children[i] = fromLegacy(c)
+			children[i] = fromLegacyLinks(c, texts)
 		}
 	}
 	h := treeHeader{ID: n.ID, Attrs: n.Attrs, Pos: n.Pos}
@@ -104,7 +116,14 @@ func fromLegacy(n *Node) treeNode {
 	case Symb:
 		return &treeSymb{treeHeader: h, Alias: n.Text}
 	case Link:
-		return &treeLink{treeHeader: h, Destination: n.Destination, Reference: n.Reference, Children: children}
+		l := &treeLink{treeHeader: h, Destination: n.Destination, Reference: n.Reference, Children: children}
+		if texts != nil && len(children) == 0 && n.Text != "" {
+			if *texts == nil {
+				*texts = linkTexts{}
+			}
+			(*texts)[l] = n.Text
+		}
+		return l
 	case Image:
 		return &treeImage{treeHeader: h, Destination: n.Destination, Reference: n.Reference, Children: children}
 	case Ellipsis:
@@ -120,13 +139,16 @@ func fromLegacy(n *Node) treeNode {
 // toLegacy converts the new tree to the old, the mirror of fromLegacy, for
 // the hooks, which take the old node until the API swaps. A task list item's
 // Checked is always set, as the parser sets it.
-func toLegacy(n treeNode) *Node {
+func toLegacy(n treeNode) *Node { return toLegacyLinks(n, nil) }
+
+// toLegacyLinks is toLegacy, setting the Text of each link texts holds.
+func toLegacyLinks(n treeNode, texts linkTexts) *Node {
 	h := n.header()
 	l := &Node{Tag: n.Tag(), ID: h.ID, Attrs: h.Attrs, Pos: h.Pos}
 	if cs := childrenOf(n); len(cs) > 0 {
 		l.Children = make([]*Node, len(cs))
 		for i, c := range cs {
-			l.Children[i] = toLegacy(c)
+			l.Children[i] = toLegacyLinks(c, texts)
 		}
 	}
 	switch n := n.(type) {
@@ -173,6 +195,7 @@ func toLegacy(n treeNode) *Node {
 		l.Text = n.Alias
 	case *treeLink:
 		l.Destination, l.Reference = n.Destination, n.Reference
+		l.Text = texts[n]
 	case *treeImage:
 		l.Destination, l.Reference = n.Destination, n.Reference
 	}
