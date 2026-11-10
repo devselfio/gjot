@@ -38,8 +38,21 @@ type Range struct {
 	End   SourcePos `json:"end"`
 }
 
-// Node is one element of the Djot AST. Only the pointer kinds below
-// implement it, through the unexported header method.
+// Node is one element of the Djot AST: a pointer to one of the kinds below
+// (*Para, *Str, *Link, ...), each of which carries only its own fields
+// beside the Header every kind embeds. Only those kinds implement it,
+// through the unexported header method. The document root is a *Section of
+// Level 0. A renderer or consumer type-switches on the kind:
+//
+//	switch n := n.(type) {
+//	case *gjot.Heading:
+//		// n.Level, n.Children
+//	case *gjot.Str:
+//		// n.Text
+//	}
+//
+// and Walk visits a tree in document order. String fields are "" when
+// absent.
 type Node interface {
 	// Tag is the djot.js name of the node's kind ("para", "str", ...), as
 	// ASTText and the JSON form print it.
@@ -49,9 +62,19 @@ type Node interface {
 	header() *Header
 }
 
-// Header is what every kind carries: the id the document gave the node
-// (written or, on a heading and its section, generated), its attributes in
-// source order, and its source range when parsed WithSourcePos.
+// Header is what every kind carries: the id the document gave the node, its
+// attributes in source order, and its source range when parsed
+// WithSourcePos.
+//
+// Attrs holds every attribute as djot.js's attribute object holds them, in
+// source order: an id written in the source is its "id" entry (an empty
+// `id=""` included, which renders and names nothing), the classes are one
+// "class" entry (a div's fence class joined to them), and a key keeps its
+// first position with its last value. ID is the id the document gave the
+// node: the non-empty written id, or a heading's and its section's
+// generated one (their AutoID). Renderers write a written id where it
+// stands and an unwritten ID first; a footnote reference's HTML writes its
+// fnrefN only and drops a written id (zjot.test difference 3).
 type Header struct {
 	ID    string
 	Attrs []Attr
@@ -239,7 +262,9 @@ type Footnote struct {
 // Inlines.
 
 // Str is text. Source is set only on a literal smart quote (Text one of
-// ‘ ’ “ ” written as ' or "): the quote it was written as.
+// ‘ ’ “ ” written as ' or "): the quote it was written as. Heading ids,
+// reference labels, image alt text and the Djot writer read it, as djot.js
+// reads smart punctuation as its source.
 type Str struct {
 	Header
 	Text   string

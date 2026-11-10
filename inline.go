@@ -205,9 +205,10 @@ func (p *inlineParser) at(n Node, start, end int) Node {
 // a slice, or the position of a literal (a smart quote, whose text is not
 // its source bytes and cannot be mapped byte for byte). A literal is only
 // ever taken whole: attachAttrs takes no word of a smart quote, and every
-// other text node is a slice. (The old tree's branch for a literal whose
-// text was as long as its source is gone: no such literal exists, a smart
-// quote's glyph being longer than the quote it was written as.)
+// other text node is a slice. (The branch the single-struct tree had for a
+// literal whose text was as long as its source is gone: no such literal
+// exists, a smart quote's glyph being longer than the quote it was written
+// as.)
 func tail(n *Str, start int) *Str {
 	t := &Str{Text: n.Text[start:]}
 	if start == 0 {

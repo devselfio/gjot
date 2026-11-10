@@ -8,9 +8,10 @@ import (
 	"unicode/utf8"
 )
 
-// jsonNode is the wire form of every kind: the old Node's JSON fields, field
-// for field and in its order, so the tree marshals byte for byte as the old
-// Node does and a document marshalled by an earlier gjot decodes. A kind
+// jsonNode is the wire form of every kind: the JSON fields of the single
+// Node struct gjot had before the per-kind types, field for field and in its
+// order, so the tree marshals byte for byte as that struct did and a
+// document marshalled by an earlier gjot decodes. A kind
 // writes only its own fields; the wire names stay the old ones, so an ordered
 // list's Marker, a footnote's and a footnote reference's Label and a symbol's
 // Alias are "text", and a raw block's or raw inline's Format is "lang".
