@@ -22,7 +22,7 @@ import (
 // text. Inline openers are counted while open, closed later or not, so more
 // than MaxNesting unclosed openers in one leaf also stop there. zjot's
 // limit is the same number.
-const MaxNesting = djot.MaxNesting
+const MaxNesting = 1000
 
 // ErrTooDeep is ParseErr's error when the source nested past MaxNesting and
 // the parser stopped nesting there.

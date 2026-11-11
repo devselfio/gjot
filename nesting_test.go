@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devselfio/gjot/ast"
+	"github.com/devselfio/gjot/internal/djot"
 )
 
 // TestNestingLimit pins MaxNesting: at the limit the tree is complete and
@@ -150,4 +151,11 @@ func inlineDepth(doc ast.Node) int {
 		return d
 	}
 	return walk(doc)
+}
+
+// The limit MaxNesting documents is the one the parser applies.
+func TestMaxNestingIsTheParsers(t *testing.T) {
+	if MaxNesting != djot.MaxNesting {
+		t.Errorf("MaxNesting = %d, the parser's = %d", MaxNesting, djot.MaxNesting)
+	}
 }
