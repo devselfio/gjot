@@ -1,38 +1,32 @@
-package gjot
+package djot
 
 import (
 	"io"
 	"sort"
 	"strconv"
 	"strings"
-)
 
-// WalkStatus is what a Hook's entering call returns to control rendering of
-// the node's children.
-type WalkStatus int
-
-const (
-	// WalkContinue renders the children between the entering and exit calls.
-	WalkContinue WalkStatus = iota
-	// WalkSkipChildren leaves the children unrendered.
-	WalkSkipChildren
+	"github.com/devselfio/gjot/ast"
 )
 
 // Hook renders a div or span in place of the default markup. It is called
 // with entering true before the children and entering false after them;
 // the exit call's WalkStatus is ignored. Returning an error aborts the
-// render and HTML returns it.
-type Hook func(w io.Writer, n Node, entering bool) (WalkStatus, error)
+// render and HTML returns it. gjot.Hook is the public form.
+type Hook func(w io.Writer, n ast.Node, entering bool) (ast.WalkStatus, error)
 
-// WithHook registers h for every div or span that has class. When a node
-// has several registered classes, the first in its class list wins.
-func WithHook(class string, h Hook) HTMLOption {
-	return func(r *renderer) {
-		if r.hooks == nil {
-			r.hooks = map[string]Hook{}
-		}
-		r.hooks[class] = h
+// HTML renders doc as HTML, byte for byte as djot.js does, rendering a div
+// or span with the hook of its first class that has one in hooks (nil for
+// none). The error is nil unless a hook returns one, and the output is then
+// nil.
+func HTML(doc ast.Node, hooks map[string]Hook) ([]byte, error) {
+	r := &renderer{hooks: hooks}
+	r.render(doc)
+	r.endnotes()
+	if r.err != nil {
+		return nil, r.err
 	}
+	return r.out, nil
 }
 
 // renderer writes the tree as HTML into out. The first hook error stops
@@ -54,7 +48,7 @@ type renderer struct {
 	// Footnote nodes met by label, footnoteLabels those labels in the
 	// order first met.
 	footnoteOrder  []string
-	footnoteDefs   map[string]*Footnote
+	footnoteDefs   map[string]*ast.Footnote
 	footnoteLabels []string
 }
 
@@ -72,14 +66,14 @@ func (r *renderer) footnoteNumber(label string) int {
 // numberFootnotes numbers the footnote references the renderer would write
 // in n's tree: an image's children are its alt text, where a reference is
 // plain text.
-func (r *renderer) numberFootnotes(n Node) {
+func (r *renderer) numberFootnotes(n ast.Node) {
 	switch n := n.(type) {
-	case *Image:
+	case *ast.Image:
 		return
-	case *FootnoteReference:
+	case *ast.FootnoteReference:
 		r.footnoteNumber(n.Label)
 	}
-	for _, c := range childrenOf(n) {
+	for _, c := range ast.Children(n) {
 		r.numberFootnotes(c)
 	}
 }
@@ -140,14 +134,14 @@ func (r *renderer) endnotes() {
 		num := strconv.Itoa(i + 1)
 		backlink := "<a href=\"#fnref" + num + "\" role=\"doc-backlink\">↩︎</a>"
 		r.w("<li id=\"fn" + num + "\">\n")
-		var blocks []Node
+		var blocks []ast.Node
 		if def := r.footnoteDefs[r.footnoteOrder[i]]; def != nil {
 			blocks = def.Children
 		}
 		last := len(blocks) - 1
-		var lastPara *Para
+		var lastPara *ast.Para
 		if last >= 0 {
-			lastPara, _ = blocks[last].(*Para)
+			lastPara, _ = blocks[last].(*ast.Para)
 		}
 		if lastPara == nil {
 			last = len(blocks)
@@ -173,14 +167,14 @@ func (r *renderer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (r *renderer) children(n Node) {
-	for _, c := range childrenOf(n) {
+func (r *renderer) children(n ast.Node) {
+	for _, c := range ast.Children(n) {
 		r.render(c)
 	}
 }
 
-func (r *renderer) hookFor(n Node) Hook {
-	for _, c := range n.header().classList() {
+func (r *renderer) hookFor(n ast.Node) Hook {
+	for _, c := range ast.HeaderOf(n).ClassList() {
 		if h, ok := r.hooks[c]; ok {
 			return h
 		}
@@ -189,13 +183,13 @@ func (r *renderer) hookFor(n Node) Hook {
 }
 
 // renderHooked renders n through h.
-func (r *renderer) renderHooked(h Hook, n Node) {
+func (r *renderer) renderHooked(h Hook, n ast.Node) {
 	status, err := h(r, n, true)
 	if err != nil {
 		r.err = err
 		return
 	}
-	if status != WalkSkipChildren {
+	if status != ast.WalkSkipChildren {
 		r.children(n)
 	}
 	if r.err != nil {
@@ -206,19 +200,19 @@ func (r *renderer) renderHooked(h Hook, n Node) {
 	}
 }
 
-func (r *renderer) render(n Node) {
+func (r *renderer) render(n ast.Node) {
 	if r.err != nil {
 		return
 	}
 	switch n.(type) {
-	case *Div, *Span:
+	case *ast.Div, *ast.Span:
 		if h := r.hookFor(n); h != nil {
 			r.renderHooked(h, n)
 			return
 		}
 	}
 	switch n := n.(type) {
-	case *Section:
+	case *ast.Section:
 		if n.Level > 0 {
 			r.w("<section")
 			r.attrs(n)
@@ -228,9 +222,9 @@ func (r *renderer) render(n Node) {
 		} else {
 			r.children(n)
 		}
-	case *Para:
+	case *ast.Para:
 		r.para(n, "")
-	case *Heading:
+	case *ast.Heading:
 		tag := "h6"
 		if n.Level >= 1 && n.Level <= 6 {
 			tag = "h" + string(rune('0'+n.Level))
@@ -240,11 +234,11 @@ func (r *renderer) render(n Node) {
 		r.w(">")
 		r.children(n)
 		r.w("</" + tag + ">\n")
-	case *ThematicBreak:
+	case *ast.ThematicBreak:
 		r.w("<hr")
 		r.attrs(n)
 		r.w(">\n")
-	case *CodeBlock:
+	case *ast.CodeBlock:
 		r.w("<pre")
 		r.attrs(n)
 		r.w("><code")
@@ -256,25 +250,25 @@ func (r *renderer) render(n Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</code></pre>\n")
-	case *BlockQuote:
+	case *ast.BlockQuote:
 		r.w("<blockquote")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</blockquote>\n")
-	case *Div:
+	case *ast.Div:
 		r.w("<div")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</div>\n")
-	case *BulletList:
+	case *ast.BulletList:
 		r.w("<ul")
 		r.attrs(n)
 		r.w(">\n")
 		r.listItems(n, n.Tight)
 		r.w("</ul>\n")
-	case *OrderedList:
+	case *ast.OrderedList:
 		// The list's own start and type come before its attributes, as
 		// djot.js.
 		r.w("<ol")
@@ -288,13 +282,13 @@ func (r *renderer) render(n Node) {
 		r.w(">\n")
 		r.listItems(n, n.Tight)
 		r.w("</ol>\n")
-	case *TaskList:
+	case *ast.TaskList:
 		r.w("<ul")
 		r.classed("task-list", n)
 		r.w(">\n")
 		r.listItems(n, n.Tight)
 		r.w("</ul>\n")
-	case *ListItem:
+	case *ast.ListItem:
 		r.w("<li")
 		if n.ID != "" {
 			r.w(" id=\"")
@@ -304,31 +298,31 @@ func (r *renderer) render(n Node) {
 		r.w(">\n")
 		r.children(n)
 		r.w("</li>\n")
-	case *TaskListItem:
+	case *ast.TaskListItem:
 		r.w("<li>\n")
 		r.children(n)
 		r.w("</li>\n")
-	case *DefinitionList:
+	case *ast.DefinitionList:
 		r.w("<dl")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</dl>\n")
-	case *Term:
+	case *ast.Term:
 		r.w("<dt>")
 		r.children(n)
 		r.w("</dt>\n")
-	case *Definition:
+	case *ast.Definition:
 		r.w("<dd>\n")
 		r.children(n)
 		r.w("</dd>\n")
-	case *Table:
+	case *ast.Table:
 		r.w("<table")
 		r.attrs(n)
 		r.w(">\n")
 		r.children(n)
 		r.w("</table>\n")
-	case *Caption:
+	case *ast.Caption:
 		// Every table has one; an empty caption is not rendered.
 		if len(n.Children) > 0 {
 			r.w("<caption")
@@ -337,50 +331,50 @@ func (r *renderer) render(n Node) {
 			r.children(n)
 			r.w("</caption>\n")
 		}
-	case *Row:
+	case *ast.Row:
 		r.w("<tr>\n")
 		r.children(n)
 		r.w("</tr>\n")
-	case *Cell:
+	case *ast.Cell:
 		tag := "td"
 		if n.Head {
 			tag = "th"
 		}
 		r.w("<" + tag)
-		if n.Align != "" && n.Align != AlignDefault {
+		if n.Align != "" && n.Align != ast.AlignDefault {
 			r.w(" style=\"text-align: " + string(n.Align) + ";\"")
 		}
 		r.w(">")
 		r.children(n)
 		r.w("</" + tag + ">\n")
-	case *Footnote:
+	case *ast.Footnote:
 		// A definition renders nothing where it stands; its content is
 		// endnote N when the body references it (endnotes). A label defined
 		// again replaces the earlier content.
 		if r.footnoteDefs == nil {
-			r.footnoteDefs = map[string]*Footnote{}
+			r.footnoteDefs = map[string]*ast.Footnote{}
 		}
 		if _, seen := r.footnoteDefs[n.Label]; !seen {
 			r.footnoteLabels = append(r.footnoteLabels, n.Label)
 		}
 		r.footnoteDefs[n.Label] = n
-	case *Str:
+	case *ast.Str:
 		r.esc(n.Text)
-	case *SoftBreak:
+	case *ast.SoftBreak:
 		r.w("\n")
-	case *HardBreak:
+	case *ast.HardBreak:
 		r.w("<br>\n")
-	case *Emph:
+	case *ast.Emph:
 		r.wrap("em", n)
-	case *Strong:
+	case *ast.Strong:
 		r.wrap("strong", n)
-	case *Verbatim:
+	case *ast.Verbatim:
 		r.w("<code")
 		r.attrs(n)
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</code>")
-	case *Link:
+	case *ast.Link:
 		r.w("<a")
 		if n.Destination != nil {
 			r.w(" href=\"")
@@ -391,7 +385,7 @@ func (r *renderer) render(n Node) {
 		r.w(">")
 		r.children(n)
 		r.w("</a>")
-	case *Image:
+	case *ast.Image:
 		r.w("<img alt=\"")
 		r.altText(n.Children)
 		r.w("\"")
@@ -402,13 +396,13 @@ func (r *renderer) render(n Node) {
 		}
 		r.attrs(n)
 		r.w(">")
-	case *Span:
+	case *ast.Span:
 		r.w("<span")
 		r.attrs(n)
 		r.w(">")
 		r.children(n)
 		r.w("</span>")
-	case *FootnoteReference:
+	case *ast.FootnoteReference:
 		// The tag writes its own id (fnrefN); a written id is dropped, not
 		// written twice (zjot.test difference 3).
 		num := strconv.Itoa(r.footnoteNumber(n.Label))
@@ -419,27 +413,27 @@ func (r *renderer) render(n Node) {
 			}
 		}
 		r.w("><sup>" + num + "</sup></a>")
-	case *Superscript:
+	case *ast.Superscript:
 		r.wrap("sup", n)
-	case *Subscript:
+	case *ast.Subscript:
 		r.wrap("sub", n)
-	case *Insert:
+	case *ast.Insert:
 		r.wrap("ins", n)
-	case *Delete:
+	case *ast.Delete:
 		r.wrap("del", n)
-	case *Mark:
+	case *ast.Mark:
 		r.wrap("mark", n)
-	case *InlineMath:
+	case *ast.InlineMath:
 		r.classed("math inline", n)
 		r.w(">\\(")
 		r.esc(n.Text)
 		r.w("\\)</span>")
-	case *DisplayMath:
+	case *ast.DisplayMath:
 		r.classed("math display", n)
 		r.w(">\\[")
 		r.esc(n.Text)
 		r.w("\\]</span>")
-	case *URL:
+	case *ast.URL:
 		r.w("<a href=\"")
 		r.attrEsc(n.Text)
 		r.w("\"")
@@ -447,7 +441,7 @@ func (r *renderer) render(n Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
-	case *Email:
+	case *ast.Email:
 		r.w("<a href=\"mailto:")
 		r.attrEsc(n.Text)
 		r.w("\"")
@@ -455,33 +449,33 @@ func (r *renderer) render(n Node) {
 		r.w(">")
 		r.esc(n.Text)
 		r.w("</a>")
-	case *Symb:
+	case *ast.Symb:
 		// zjot's rendering (djot.js prints the `:alias:` text; difference 4).
 		r.classed("symbol", n)
 		r.w(">")
 		r.esc(n.Alias)
 		r.w("</span>")
-	case *DoubleQuoted:
+	case *ast.DoubleQuoted:
 		r.w("\u201c")
 		r.children(n)
 		r.w("\u201d")
-	case *SingleQuoted:
+	case *ast.SingleQuoted:
 		r.w("\u2018")
 		r.children(n)
 		r.w("\u2019")
-	case *NonBreakingSpace:
+	case *ast.NonBreakingSpace:
 		r.w("&nbsp;")
-	case *Ellipsis:
+	case *ast.Ellipsis:
 		r.w("\u2026")
-	case *EmDash:
+	case *ast.EmDash:
 		r.w("\u2014")
-	case *EnDash:
+	case *ast.EnDash:
 		r.w("\u2013")
-	case *RawInline:
+	case *ast.RawInline:
 		if n.Format == "html" {
 			r.w(n.Text)
 		}
-	case *RawBlock:
+	case *ast.RawBlock:
 		if n.Format == "html" {
 			r.w(n.Text)
 		}
@@ -490,7 +484,7 @@ func (r *renderer) render(n Node) {
 	}
 }
 
-func (r *renderer) wrap(tag string, n Node) {
+func (r *renderer) wrap(tag string, n ast.Node) {
 	r.w("<" + tag)
 	r.attrs(n)
 	r.w(">")
@@ -498,17 +492,17 @@ func (r *renderer) wrap(tag string, n Node) {
 	r.w("</" + tag + ">")
 }
 
-func (r *renderer) altText(children []Node) {
+func (r *renderer) altText(children []ast.Node) {
 	r.attrEsc(stringContent(children, true))
 }
 
 // listItems writes a list's items with tight in force below them.
-func (r *renderer) listItems(list Node, tight bool) {
+func (r *renderer) listItems(list ast.Node, tight bool) {
 	old := r.tight
 	r.tight = tight
-	for _, item := range childrenOf(list) {
+	for _, item := range ast.Children(list) {
 		r.w("<li>\n")
-		if t, ok := item.(*TaskListItem); ok {
+		if t, ok := item.(*ast.TaskListItem); ok {
 			if t.Checked {
 				r.w("<input disabled=\"\" type=\"checkbox\" checked=\"\"/>\n")
 			} else {
@@ -523,7 +517,7 @@ func (r *renderer) listItems(list Node, tight bool) {
 
 // para writes a paragraph with trailer inside it after its content; bare
 // inside a tight list.
-func (r *renderer) para(n *Para, trailer string) {
+func (r *renderer) para(n *ast.Para, trailer string) {
 	if r.tight {
 		r.children(n)
 		r.w(trailer + "\n")
@@ -539,21 +533,21 @@ func (r *renderer) para(n *Para, trailer string) {
 // attrs writes the node's attributes in source order, as djot.js: its id
 // where an `id` was written (an empty `id=""` included, over a generated
 // id), or first when the document gave it.
-func (r *renderer) attrs(n Node) {
-	r.filteredAttrs(n.header(), false)
+func (r *renderer) attrs(n ast.Node) {
+	r.filteredAttrs(ast.HeaderOf(n), false)
 }
 
 // classed opens a span (or, for a task list, a ul) whose intrinsic class
 // the node's classes join, then writes its other attributes, as djot.js.
-func (r *renderer) classed(intrinsic string, n Node) {
-	if _, ok := n.(*TaskList); ok {
+func (r *renderer) classed(intrinsic string, n ast.Node) {
+	if _, ok := n.(*ast.TaskList); ok {
 		r.w(" class=\"")
 	} else {
 		r.w("<span class=\"")
 	}
 	r.w(intrinsic)
-	h := n.header()
-	for _, c := range h.classList() {
+	h := ast.HeaderOf(n)
+	for _, c := range h.ClassList() {
 		r.w(" ")
 		r.attrEsc(c)
 	}
@@ -561,7 +555,7 @@ func (r *renderer) classed(intrinsic string, n Node) {
 	r.filteredAttrs(h, true)
 }
 
-func (r *renderer) filteredAttrs(h *Header, skipClass bool) {
+func (r *renderer) filteredAttrs(h *ast.Header, skipClass bool) {
 	attrs := h.Attrs
 	if h.ID != "" && !hasKey(attrs, "id") {
 		r.attr("id", h.ID)

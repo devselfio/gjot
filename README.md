@@ -60,59 +60,80 @@ go get github.com/devselfio/gjot
 ```
 
 ```go
-import "github.com/devselfio/gjot"
+import (
+	"github.com/devselfio/gjot"
+	"github.com/devselfio/gjot/ast"
+)
 
 doc := gjot.Parse([]byte("Hello *world*"))
 html, err := gjot.HTML(doc)
 
 // Render fenced divs of a class yourself: `::: chess {fen=...}`
-board := func(w io.Writer, n gjot.Node, entering bool) (gjot.WalkStatus, error) {
+board := func(w io.Writer, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
 		fmt.Fprintf(w, "<chess-board fen=%q></chess-board>\n", n.Attr("fen"))
 	}
-	return gjot.WalkSkipChildren, nil
+	return ast.WalkSkipChildren, nil
 }
 html, err = gjot.HTML(doc, gjot.WithHook("chess", board))
 
 // Read the tree: one Go type per node kind, behind the Node interface.
-gjot.Walk(doc, func(n gjot.Node) gjot.WalkStatus {
+ast.Walk(doc, func(n ast.Node) ast.WalkStatus {
 	switch n := n.(type) {
-	case *gjot.Heading:
+	case *ast.Heading:
 		fmt.Println("heading", n.Level, n.ID)
-	case *gjot.Link:
+	case *ast.Link:
 		if n.Destination != nil {
 			fmt.Println("link to", *n.Destination)
 		}
-	case *gjot.CodeBlock:
-		return gjot.WalkSkipChildren // a leaf; shown for the skip
+	case *ast.CodeBlock:
+		return ast.WalkSkipChildren // a leaf; shown for the skip
 	}
-	return gjot.WalkContinue
+	return ast.WalkContinue
 })
 ```
 
-The tree is shaped as `go/ast`'s: `Node` is an interface, and each kind of
-node is its own struct (`*gjot.Para`, `*gjot.Str`, `*gjot.Link`, ... the 49
+Two packages make the library, as `go/parser` and `go/ast` make Go's:
+`github.com/devselfio/gjot` parses and renders (`Parse`, `ParseErr`, `HTML`,
+`ASTText`, `Djot`, their options and the hook), and
+`github.com/devselfio/gjot/ast` declares the tree they produce and read (the
+node kinds, `Walk`, `WalkStatus` and `UnmarshalNode`). A program that only
+reads or decodes trees needs only `ast`.
+
+The tree is shaped as `go/ast`'s: `ast.Node` is an interface, and each kind of
+node is its own struct (`*ast.Para`, `*ast.Str`, `*ast.Link`, ... the 49
 kinds `Parse` produces, named as djot.js's tags are: `bullet_list` is
-`BulletList`) carrying only the fields that kind has. Every kind embeds a
-`Header` with the node's `ID`, `Attrs` and `Pos`, so `n.Attr`, `n.HasClass`
-and `n.Tag()` (the djot.js tag, as `ASTText` and the JSON print it) work on
-any `Node`. The root `Parse` returns is a `*gjot.Section` of `Level` 0.
-Containers hold `Children []Node`; `Walk` visits a node, then its children in
-order, the footnote definitions after the body. A hook is called with a
-`*gjot.Div` or a `*gjot.Span`.
+`BulletList`) carrying only the fields that kind has. Every kind embeds an
+`ast.Header` with the node's `ID`, `Attrs` and `Pos`, so `n.Attr`,
+`n.HasClass` and `n.Tag()` (the djot.js tag, as `ASTText` and the JSON print
+it) work on any `Node`. The root `Parse` returns is an `*ast.Section` of
+`Level` 0. Containers hold `Children []ast.Node`; `ast.Walk` visits a node,
+then its children in order, the footnote definitions after the body. A hook
+is called with an `*ast.Div` or an `*ast.Span`.
+
+In package `gjot`:
 
 | Function | Description |
 | --- | --- |
-| `Parse(src []byte, opts ...ParseOption) Node` | Parse Djot into an AST, whose root is a `*Section` of level 0. Never fails: every input is a document. Blocks nest at most `MaxNesting` (1,000) containers deep and a leaf's inlines at most `MaxNesting` deep; a marker that would nest deeper is text |
-| `ParseErr(src []byte, opts ...ParseOption) (Node, error)` | `Parse` that also returns `ErrTooDeep` when the limit stopped nesting; the tree is the same |
+| `Parse(src []byte, opts ...ParseOption) ast.Node` | Parse Djot into an AST, whose root is an `*ast.Section` of level 0. Never fails: every input is a document. Blocks nest at most `MaxNesting` (1,000) containers deep and a leaf's inlines at most `MaxNesting` deep; a marker that would nest deeper is text |
+| `ParseErr(src []byte, opts ...ParseOption) (ast.Node, error)` | `Parse` that also returns `ErrTooDeep` when the limit stopped nesting; the tree is the same |
 | `WithSourcePos() ParseOption` | Record each node's source range in its `Header.Pos` |
-| `HTML(doc Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
-| `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h func(w io.Writer, n Node, entering bool) (WalkStatus, error)`; `WalkSkipChildren` drops the default child rendering |
-| `ASTText(doc Node) []byte` | Render the AST in djot.js's indented text format |
-| `Djot(doc Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
+| `HTML(doc ast.Node, opts ...HTMLOption) ([]byte, error)` | Render HTML, byte-identical to djot.js. The error comes only from a hook |
+| `WithHook(class string, h Hook) HTMLOption` | Render divs and spans of that class with `h func(w io.Writer, n ast.Node, entering bool) (ast.WalkStatus, error)`; `ast.WalkSkipChildren` drops the default child rendering |
+| `ASTText(doc ast.Node) []byte` | Render the AST in djot.js's indented text format |
+| `Djot(doc ast.Node) []byte` | Write the AST back as Djot. Re-parses to the same HTML and AST; reference links keep their labels with the definitions collected at the end, footnote definitions keep their labels |
+
+In package `ast`:
+
+| Function | Description |
+| --- | --- |
 | `Walk(n Node, visit func(Node) WalkStatus)` | Visit `n` and its descendants in document order; `WalkSkipChildren` skips a node's children |
 | `UnmarshalNode(data []byte) (Node, error)` | Decode the JSON form of a node of any kind, switching on `"tag"` |
 | `HasClass(string) bool`, `Attr(string) string`, `Tag() Tag` | On every node (`HasClass` and `Attr` through its `Header`): class and attribute lookup, and the djot.js tag name |
+| `HeaderOf(n Node) *Header` | The `Header` `n` embeds, itself and not a copy |
+| `Children(n Node) []Node` | `n`'s children in order, the node's own slice; nil for a leaf |
+| `(*Header).WrittenID() (id string, written bool)` | The id written on the node; `written` tells `id=""` from no id. `ID` is the id the document gave it, written or generated |
+| `(*Header).ClassList() []string` | The classes the node renders with, in written order |
 
 The nesting limit bounds the tree: it is never deeper than about twice
 `MaxNesting` plus a few levels for leaves, table rows and sections, which
@@ -130,8 +151,8 @@ Every kind marshals itself: `json.Marshal(doc)` writes one object per node,
 its kind in `"tag"` and only the fields it has, byte for byte the JSON that
 gjot wrote before the tree had a type per kind (the field names and the
 `"tag"` discriminator are unchanged, so documents marshalled then decode
-now). `gjot.UnmarshalNode(data)` decodes a node of any kind, switching on
-`"tag"`; `json.Unmarshal` into a concrete kind (`var sec gjot.Section` for a
+now). `ast.UnmarshalNode(data)` decodes a node of any kind, switching on
+`"tag"`; `json.Unmarshal` into a concrete kind (`var sec ast.Section` for a
 whole document) works too, and fails if the JSON is of another kind. The
 JSON round-trips to the same AST text and HTML. A smart quote keeps the
 quote it was written as in `"source"` (`Str.Source`, empty on every other
@@ -189,6 +210,13 @@ that encodes to the same bytes.
 positions is written byte for byte as one parsed without them, and reads back
 to the source's HTML, over every case and the bench page.
 
+The corpus, writer, JSON, hook and nesting tests sit at the root and go
+through the public entry points. `layout_test.go` holds the root to one
+non-test Go file, `gjot.go`, and pins the exported names of the root and of
+`ast`; `api_test.go` uses both packages as an outside program would. The
+tree's own tests (kinds, sizes, accessors, `Walk`, JSON encoding and
+decoding) are in `ast`, and the parser's unit tests are in `internal/djot`.
+
 `make spec-drift` (or `go run ./cmd/driftcheck`) checks that corpus against the
 tag pinned in `ORIGIN.md`, which must be a `vN.N.N` tag, never a branch.
 Offline it compares the files with their checked-in record,
@@ -212,13 +240,15 @@ offline check on the real corpus.
 ```
 make bench
 # or, without make:
-go test -run '^$' -bench . -benchmem .
+go test -run '^$' -bench . -benchmem ./...
 ```
 
 `BenchmarkCorpus` pushes the whole corpus (the 1066 cases `TestSpec` reads,
 8,025 nodes) through five paths; `BenchmarkPage` pushes one large document,
 `testdata/bench/page.dj` (52,021 bytes, 6,160 nodes), through the same five.
-An op is the whole corpus or the one page. `Parse` times parsing; `HTML`,
+An op is the whole corpus or the one page. Both are in the root package;
+`make bench` also runs `internal/djot`'s `BenchmarkInlineOpenerStack`, which
+times the inline opener stack at three sizes. `Parse` times parsing; `HTML`,
 `ASTTextPos` (`ASTText` over a tree parsed `WithSourcePos`), `Djot` and `JSON`
 (`json.Marshal` then `json.Unmarshal`) time only that step, over trees parsed
 before the timer. Beside Go's `ns/op`, `B/op` and `allocs/op`, each line reports
@@ -235,12 +265,14 @@ file is committed and the benchmark reads it; `TestBenchPageCurrent` fails
 unless it is the generator's output byte for byte, and
 `go test -run TestBenchPageCurrent -write-bench-page .` rewrites it.
 
-`go test -v -run TestNodeSize .` prints the size of every node kind and, on a
-64-bit platform, fails if a common kind (`Str`, `Para`, `Emph`, `Strong`,
+`go test -v -run TestNodeSize ./ast` prints the size of every node kind and,
+on a 64-bit platform, fails if a common kind (`Str`, `Para`, `Emph`, `Strong`,
 `Link`, `Image`, `Heading`, `Section`, `ListItem`, `BulletList`, `Span`,
 `Verbatim`) is 100 bytes or more. Today the kinds are 48 to 112 bytes: `Str`
-88, `Para` and `Emph` 72, `Link` 96, `OrderedList` 112 (the one kind over
-100). The single `Node` struct they replaced was 272 bytes for every node.
+80, `Para` and `Emph` 72, `Link` 96, `OrderedList` 112 (the one kind over
+100). `Str` was 88 bytes until its parse-time offset moved into the inline
+parser (swarm-gridapp#17). The single `Node` struct they replaced was 272
+bytes for every node.
 
 With a type per kind, from one `make bench` run at commit
 22c973a07e698b4471d8fb249aef54ddf378caf0 (the per-kind tree, swarm-gridapp#8),
@@ -307,7 +339,7 @@ contract; runs on it vary by tens of percent, and the maintainer may replace
 them.
 
 A change that should not slow gjot down is compared with `benchstat`, not with
-this table: `go test -run '^$' -bench . -benchmem -count 10 . > old.txt` on
+this table: `go test -run '^$' -bench . -benchmem -count 10 ./... > old.txt` on
 `main`, the same into `new.txt` on the branch, then `benchstat old.txt new.txt`.
 
 ## Architecture
@@ -318,29 +350,35 @@ line is run against the open containers from the outermost in; while the
 innermost container it continues holds blocks, the line may open new ones; what
 remains is lazy text for an open paragraph, a blank line, or text for the
 innermost container. A container closes when a line neither continues it nor is
-lazy text for it. One pass through the input builds the whole `Node` tree. Ids
+lazy text for it. One pass through the input builds the whole `ast.Node` tree. Ids
 are registered where they stand; references, footnotes and sections are resolved
 after the pass.
 
+The root holds one file, `gjot.go`, as gridapp's ADR 0018 rules; the tree is
+the public package `ast`, and the implementation is `internal/djot`, which
+imports `ast` and never the root. `ast` imports only the standard library.
+
 ```
-gjot.go          Public API: Parse, ParseErr, MaxNesting, WithSourcePos, HTML
-node.go          AST types: the Node interface, Header, one struct per kind, Tag, Attr, SourcePos, Range
-walk.go          Walk, and each kind's children
-json.go          The JSON form: per-kind MarshalJSON, UnmarshalNode
-parser.go        Block parsing: the container stack over lines
-leaf.go          What one line says (fences, markers, table rows, ...)
-document.go      Definitions, ids, references, sections, footnotes
-inline.go        Inline parsing (emphasis, links, smart quotes, ...)
-attributes.go    Attribute parser ({#id .class key=value})
-linemap.go       Source position mapping for joined inline text
-html.go          HTML renderer and the class hook
-ast.go           AST text renderer
-writer.go        Djot writer
-spec_test.go     Corpus runner over testdata/spec/*.test
-bench_test.go    Benchmarks over the corpus and testdata/bench/page.dj; the page generator; TestNodeSize
-testdata/bench/page.dj  The benchmark page (generated, committed)
-cmd/gjot         CLI
-cmd/driftcheck   Corpus drift check against zjot
+gjot.go                     Public API: Parse, ParseErr, MaxNesting, ErrTooDeep, WithSourcePos, HTML, WithHook, Hook, ASTText, Djot
+ast/node.go                 AST types: the Node interface, Header, one struct per kind, Tag, Attr, SourcePos, Range, HeaderOf
+ast/walk.go                 Walk, WalkStatus, and each kind's children (Children)
+ast/json.go                 The JSON form: per-kind MarshalJSON, UnmarshalNode
+internal/djot/djot.go       The parser entry the root calls, and the nesting limit
+internal/djot/parser.go     Block parsing: the container stack over lines
+internal/djot/leaf.go       What one line says (fences, markers, table rows, ...)
+internal/djot/document.go   Definitions, ids, references, sections, footnotes
+internal/djot/inline.go     Inline parsing (emphasis, links, smart quotes, ...)
+internal/djot/attributes.go Attribute parser ({#id .class key=value})
+internal/djot/linemap.go    Source position mapping for joined inline text
+internal/djot/html.go       HTML renderer and the class hook
+internal/djot/asttext.go    AST text renderer
+internal/djot/writer.go     Djot writer
+spec_test.go                Corpus runner over testdata/spec/*.test
+bench_test.go               Benchmarks over the corpus and testdata/bench/page.dj; the page generator
+layout_test.go              The root's one file and the exported names of the root and ast
+testdata/bench/page.dj      The benchmark page (generated, committed)
+cmd/gjot                    CLI
+cmd/driftcheck              Corpus drift check against zjot
 ```
 
 ## Changes
@@ -397,3 +435,36 @@ cmd/driftcheck   Corpus drift check against zjot
 - 2026-11-10. Breaking change: the module and import path is now
   `github.com/devselfio/gjot`. Update existing import statements and install
   commands before upgrading.
+- 2026-11-11. Breaking change: the node types moved to the package
+  `github.com/devselfio/gjot/ast` (swarm-gridapp#17, gridapp ADR 0018), as
+  `go/ast` sits beside `go/parser`. The root package keeps one file,
+  `gjot.go`, with the entry points; the parser and renderers are in
+  `internal/djot`, which no program can import. Behaviour, output and the
+  JSON form are unchanged.
+  - Moved to `ast`, under the same names: `Node`, `Header`, `Tag`, `Attr`,
+    `SourcePos`, `Range`, `CellAlign` and its four `Align*` constants, the
+    49 node kinds with their methods (`Tag`, `MarshalJSON`, `UnmarshalJSON`,
+    and `HasClass` and `Attr` on `Header`), `Walk`, `WalkStatus`,
+    `WalkContinue`, `WalkSkipChildren` and `UnmarshalNode`. Write
+    `ast.Node`, `*ast.Heading`, `ast.Walk`, `ast.WalkSkipChildren`,
+    `ast.UnmarshalNode` where you wrote `gjot.`; the root keeps no aliases
+    for them, so that each name has one home.
+  - Unchanged in `gjot`: `Parse`, `ParseErr`, `HTML`, `ASTText`, `Djot`,
+    `ParseOption`, `WithSourcePos`, `HTMLOption`, `Hook`, `WithHook`,
+    `MaxNesting` and `ErrTooDeep`; their signatures now name `ast.Node` and
+    `ast.WalkStatus` (`Hook` is
+    `func(w io.Writer, n ast.Node, entering bool) (ast.WalkStatus, error)`).
+  - Added to `ast`, because the renderers left the package that declares the
+    tree and still need what they read before through unexported names:
+    `HeaderOf(n Node) *Header` (the node's own header), `Children(n Node)
+    []Node` (its child slice, nil for a leaf), `(*Header).WrittenID()` (the
+    written id and whether one was written, `id=""` included) and
+    `(*Header).ClassList()` (its classes in written order). `Node` keeps its
+    unexported method, so only `ast`'s kinds implement it.
+  - `Str` is 8 bytes smaller: the parse-time source offset it carried in an
+    unexported field is now kept by the inline parser while it runs, in a
+    map per leaf. That costs parsing: on the swarm worker's runner, six
+    interleaved `-count 1` samples each against fb07082 put `Corpus/Parse`
+    at about +12% ns/op (allocs/node 5.80 to 6.31, B/node 576 to 619) and
+    `Page/Parse` at about +17% (allocs/node 3.18 to 3.71, B/node 506 to
+    552). The other paths do not parse inside the timer.

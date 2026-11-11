@@ -1,4 +1,4 @@
-package gjot
+package ast
 
 import (
 	"encoding/json"
@@ -96,7 +96,7 @@ func appendJSON(dst []byte, n Node) []byte {
 	wireFields(&w, n)
 	dst = append(dst, `{"tag":`...)
 	dst = appendJSONString(dst, string(w.Tag))
-	if children := childrenOf(n); len(children) > 0 {
+	if children := Children(n); len(children) > 0 {
 		dst = append(dst, `,"children":[`...)
 		for i, c := range children {
 			if i > 0 {

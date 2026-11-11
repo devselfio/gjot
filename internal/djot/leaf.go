@@ -1,8 +1,10 @@
-package gjot
+package djot
 
 import (
 	"strconv"
 	"strings"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // leaf.go is what one line says, in the shape of zjot v2.0.0's leaf.zig:
@@ -239,21 +241,21 @@ func isTableSep(line string) bool {
 
 // parseSepAligns is the alignment each cell of a separator row gives its
 // column.
-func parseSepAligns(line string) []CellAlign {
+func parseSepAligns(line string) []ast.CellAlign {
 	cells := rowCells(line)
-	aligns := make([]CellAlign, 0, len(cells))
+	aligns := make([]ast.CellAlign, 0, len(cells))
 	for _, c := range cells {
 		c = strings.Trim(c, " \t")
 		left, right := strings.HasPrefix(c, ":"), strings.HasSuffix(c, ":")
 		switch {
 		case left && right && len(c) > 1:
-			aligns = append(aligns, AlignCenter)
+			aligns = append(aligns, ast.AlignCenter)
 		case right && !left:
-			aligns = append(aligns, AlignRight)
+			aligns = append(aligns, ast.AlignRight)
 		case left:
-			aligns = append(aligns, AlignLeft)
+			aligns = append(aligns, ast.AlignLeft)
 		default:
-			aligns = append(aligns, AlignDefault)
+			aligns = append(aligns, ast.AlignDefault)
 		}
 	}
 	return aligns
@@ -574,7 +576,7 @@ func getListStart(markerText string, s listStyle) int {
 // orderedStart is the number an OrderedList node starts at: its first
 // marker's text (Marker) read in its style (Style); 1 when the node has
 // neither.
-func orderedStart(n *OrderedList) int {
+func orderedStart(n *ast.OrderedList) int {
 	s, _, ok := parseStyleString(n.Style)
 	if !ok {
 		return 1

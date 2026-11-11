@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
+	"github.com/devselfio/gjot/internal/djot"
 )
 
 // TestNestingLimit pins MaxNesting: at the limit the tree is complete and
@@ -94,8 +97,8 @@ func TestNestingLimit(t *testing.T) {
 			if doc == nil {
 				t.Fatal("ParseErr returned no tree")
 			}
-			ast := ASTText(doc)
-			if got := ASTText(Parse([]byte(tt.src))); !bytes.Equal(got, ast) {
+			text := ASTText(doc)
+			if got := ASTText(Parse([]byte(tt.src))); !bytes.Equal(got, text) {
 				t.Errorf("Parse and ParseErr disagree on the tree")
 			}
 			html, herr := HTML(doc)
@@ -125,27 +128,34 @@ func wantCount(t *testing.T, s, sub string, want int) {
 
 // inlineDepth is how deep inline elements nest under any paragraph of doc,
 // counting the elements that hold others (a text leaf adds no level).
-func inlineDepth(doc Node) int {
-	var under func(n Node) int
-	under = func(n Node) int {
+func inlineDepth(doc ast.Node) int {
+	var under func(n ast.Node) int
+	under = func(n ast.Node) int {
 		d := 0
-		for _, c := range childrenOf(n) {
-			if len(childrenOf(c)) > 0 {
+		for _, c := range ast.Children(n) {
+			if len(ast.Children(c)) > 0 {
 				d = max(d, 1+under(c))
 			}
 		}
 		return d
 	}
-	var walk func(n Node) int
-	walk = func(n Node) int {
-		if _, ok := n.(*Para); ok {
+	var walk func(n ast.Node) int
+	walk = func(n ast.Node) int {
+		if _, ok := n.(*ast.Para); ok {
 			return under(n)
 		}
 		d := 0
-		for _, c := range childrenOf(n) {
+		for _, c := range ast.Children(n) {
 			d = max(d, walk(c))
 		}
 		return d
 	}
 	return walk(doc)
+}
+
+// The limit MaxNesting documents is the one the parser applies.
+func TestMaxNestingIsTheParsers(t *testing.T) {
+	if MaxNesting != djot.MaxNesting {
+		t.Errorf("MaxNesting = %d, the parser's = %d", MaxNesting, djot.MaxNesting)
+	}
 }

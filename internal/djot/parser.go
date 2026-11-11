@@ -1,7 +1,9 @@
-package gjot
+package djot
 
 import (
 	"strings"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // parser.go is the block parser as a container stack, in the shape of zjot
@@ -25,7 +27,7 @@ import (
 // offset of the newline before it.
 type srcLine struct {
 	text          string
-	pos, eol      SourcePos
+	pos, eol      ast.SourcePos
 	newline       bool
 	newlineBefore int
 }
@@ -47,13 +49,13 @@ func splitLines(input string) []srcLine {
 			text = raw[:len(raw)-1]
 		}
 		line++
-		l := srcLine{text: text, pos: SourcePos{Line: line, Col: 1, Offset: offset}, newline: newline, newlineBefore: max(offset-1, 0)}
+		l := srcLine{text: text, pos: ast.SourcePos{Line: line, Col: 1, Offset: offset}, newline: newline, newlineBefore: max(offset-1, 0)}
 		offset += len(raw)
 		if newline {
 			offset++
-			l.eol = SourcePos{Line: line + 1, Col: 0, Offset: offset - 1}
+			l.eol = ast.SourcePos{Line: line + 1, Col: 0, Offset: offset - 1}
 		} else {
-			l.eol = SourcePos{Line: line, Col: len(text) + 1, Offset: offset}
+			l.eol = ast.SourcePos{Line: line, Col: len(text) + 1, Offset: offset}
 		}
 		out = append(out, l)
 	}
@@ -62,9 +64,9 @@ func splitLines(input string) []srcLine {
 
 // inputEnd is where the input ends, as zjot's Lines.end: past the last
 // line's newline (col 0 of the line after), or after its last byte.
-func inputEnd(lines []srcLine) SourcePos {
+func inputEnd(lines []srcLine) ast.SourcePos {
 	if len(lines) == 0 {
-		return SourcePos{Line: 1, Col: 0, Offset: 0}
+		return ast.SourcePos{Line: 1, Col: 0, Offset: 0}
 	}
 	return lines[len(lines)-1].eol
 }
@@ -88,7 +90,7 @@ func (c *cursor) skipSpace() {
 func (c *cursor) rest() string { return c.line.text[c.i:] }
 func (c *cursor) atEOL() bool  { return c.i >= len(c.line.text) }
 
-func (c *cursor) pos() SourcePos {
+func (c *cursor) pos() ast.SourcePos {
 	if c.atEOL() {
 		return c.line.eol
 	}
@@ -96,15 +98,15 @@ func (c *cursor) pos() SourcePos {
 }
 
 // at is the position of byte i of the line.
-func (c *cursor) at(i int) SourcePos {
-	return SourcePos{Line: c.line.pos.Line, Col: i + 1, Offset: c.line.pos.Offset + i}
+func (c *cursor) at(i int) ast.SourcePos {
+	return ast.SourcePos{Line: c.line.pos.Line, Col: i + 1, Offset: c.line.pos.Offset + i}
 }
 
 // before is one position before pos: the byte before it, or col 0 (the
 // previous line's newline) at the line's start.
-func (c *cursor) before() SourcePos {
+func (c *cursor) before() ast.SourcePos {
 	if c.i == 0 {
-		return SourcePos{Line: c.line.pos.Line, Col: 0, Offset: c.line.newlineBefore}
+		return ast.SourcePos{Line: c.line.pos.Line, Col: 0, Offset: c.line.newlineBefore}
 	}
 	return c.at(c.i - 1)
 }
@@ -121,10 +123,10 @@ func (c *cursor) stand() stand {
 type stand struct {
 	// pos is the current position: the next block's content, or a blank
 	// line's newline. before is one position before it.
-	pos, before SourcePos
+	pos, before ast.SourcePos
 	// lineFirst is the current line's first byte (its newline when empty),
 	// where a block ending in a hard break ends.
-	lineFirst SourcePos
+	lineFirst ast.SourcePos
 	eof       bool
 	// inclusive: the block closing ended on the current line (a code
 	// block's closing fence).
@@ -232,7 +234,7 @@ type containerData struct {
 	level int
 	// bareAt: the first bare '#' line after the heading's last content
 	// line, where it ends when that content ends in a hard break.
-	bareAt *SourcePos
+	bareAt *ast.SourcePos
 	// para: no inline attribute is read before attrsFrom, the end of the
 	// lines a failed block attribute took; converted says it was one.
 	attrsFrom int
@@ -250,30 +252,30 @@ type containerData struct {
 	fence fenceInfo
 	// div and code block: the closing fence's last character, once met;
 	// thematic break: its line's end.
-	end         *SourcePos
+	end         *ast.SourcePos
 	divFenceLen int
 	class       string
 	// table: the alignments the last separator row gave, and the row on
 	// the line before, which a separator row makes a header row.
-	aligns    []CellAlign
-	rowBefore *Row
+	aligns    []ast.CellAlign
+	rowBefore *ast.Row
 }
 
 type container struct {
 	kind     kind
-	start    SourcePos
-	children []Node
+	start    ast.SourcePos
+	children []ast.Node
 	// pendingAttrs are block attributes waiting for this container's next
 	// child block.
 	pendingAttrs *blockAttrs
 	// leafEnd: for a paragraph, heading or attribute block, one past the
 	// last byte of its last line that is not a trailing space.
-	leafEnd SourcePos
+	leafEnd ast.SourcePos
 	data    containerData
 }
 
 // leafStart is where a leaf line's content starts and where its newline is.
-type leafStart struct{ pos, eol SourcePos }
+type leafStart struct{ pos, eol ast.SourcePos }
 
 type stackParser struct {
 	lines    []srcLine
@@ -283,11 +285,11 @@ type stackParser struct {
 	// pendingAttrs are block attributes waiting for the next top-level
 	// block.
 	pendingAttrs *blockAttrs
-	blocks       []Node
+	blocks       []ast.Node
 	// The open leaf's lines; the leaf is always the tip.
 	leafSlices      []string
 	leafStarts      []leafStart
-	leafLastEOL     SourcePos
+	leafLastEOL     ast.SourcePos
 	leafLastNewline bool
 	// finishedLine is set by a line a code fence (opening or closing), a
 	// div's opening fence or a table row took: nothing else on it is read.
@@ -307,14 +309,14 @@ type stackParser struct {
 // parseStack parses input with the container stack into the whole document
 // tree: the root Section that Parse returns, and whether the nesting limit
 // stopped a block or an inline from nesting.
-func parseStack(input string, trackPos bool) (doc *Section, tooDeep bool) {
+func parseStack(input string, trackPos bool) (doc *ast.Section, tooDeep bool) {
 	p := &stackParser{lines: splitLines(input), doc: newDocument(trackPos), trackPos: trackPos, leafLastNewline: true}
 	blocks := p.parseAll()
-	var end *SourcePos
+	var end *ast.SourcePos
 	if trackPos {
 		e := inputEnd(p.lines)
 		if p.lineCount <= p.lastBlockLine && len(blocks) > 0 {
-			if pos := blocks[len(blocks)-1].header().Pos; pos != nil {
+			if pos := ast.HeaderOf(blocks[len(blocks)-1]).Pos; pos != nil {
 				e = pos.End
 			}
 		}
@@ -325,7 +327,7 @@ func parseStack(input string, trackPos bool) (doc *Section, tooDeep bool) {
 
 // parseAll runs every line through parseLine and closes what is open at
 // the end.
-func (p *stackParser) parseAll() []Node {
+func (p *stackParser) parseAll() []ast.Node {
 	for _, l := range p.lines {
 		p.lineCount++
 		p.parseLine(l)
@@ -794,7 +796,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		if row := c.data.rowBefore; row != nil {
 			row.Head = true
 			for i, cell := range row.Children {
-				cell := cell.(*Cell)
+				cell := cell.(*ast.Cell)
 				cell.Head = true
 				cell.Align = alignAt(aligns, i)
 			}
@@ -802,7 +804,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		c.data.rowBefore = nil
 		return
 	}
-	row := &Row{}
+	row := &ast.Row{}
 	// Each cell's text starts after the pipe before it; the cells are
 	// contiguous, one pipe apart.
 	off := cur.i + 1
@@ -814,7 +816,7 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 		}
 		// No line end follows a cell: its trailing tab is content.
 		children, _ := p.leafInlines(0, false)
-		cell := &Cell{Children: children, Align: alignAt(c.data.aligns, i)}
+		cell := &ast.Cell{Children: children, Align: alignAt(c.data.aligns, i)}
 		row.Children = append(row.Children, p.spanned(cell, cur.at(off-1), cur.at(off+len(text))))
 		off += len(text) + 1
 	}
@@ -825,11 +827,11 @@ func (p *stackParser) tableRow(c *container, cur *cursor) {
 }
 
 // alignAt is column i's alignment, the default past the separator's cells.
-func alignAt(aligns []CellAlign, i int) CellAlign {
+func alignAt(aligns []ast.CellAlign, i int) ast.CellAlign {
 	if i < len(aligns) {
 		return aligns[i]
 	}
-	return AlignDefault
+	return ast.AlignDefault
 }
 
 // trimCellEnd trims a cell's trailing spaces, but keeps one that a
@@ -847,7 +849,7 @@ func trimCellEnd(text string) string {
 
 // push opens a container. One that makes a node registers the id waiting
 // for it now, where djot.js reads it.
-func (p *stackParser) push(k kind, data containerData, start SourcePos) {
+func (p *stackParser) push(k kind, data containerData, start ast.SourcePos) {
 	p.listEvent(k == kindList, k == kindListItem)
 	if k.makesNode() {
 		if ba := *p.attrsSlot(); ba != nil {
@@ -940,7 +942,7 @@ func (p *stackParser) addLeafLine(cur *cursor) {
 	}
 }
 
-func (p *stackParser) addLeafSlice(text string, start SourcePos, l srcLine) {
+func (p *stackParser) addLeafSlice(text string, start ast.SourcePos, l srcLine) {
 	p.leafSlices = append(p.leafSlices, text)
 	p.leafStarts = append(p.leafStarts, leafStart{pos: start, eol: l.eol})
 	p.leafLastEOL = l.eol
@@ -975,7 +977,7 @@ func (p *stackParser) dropLeaf() {
 // from; it empties the leaf buffers. endsLine says whether a line end
 // follows the text (a cell's does not). The ids it holds are registered:
 // those of inline attributes left on no node first, then the tree's.
-func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]Node, string) {
+func (p *stackParser) leafInlines(attrsFrom int, endsLine bool) ([]ast.Node, string) {
 	defer p.dropLeaf()
 	src := strings.Join(p.leafSlices, "\n")
 	if src == "" {
@@ -1013,29 +1015,29 @@ func (p *stackParser) leafText() string {
 
 // leafChildren is the inlines of the open leaf, which a paragraph, heading
 // or caption c holds, and the leaf's range when positions are tracked.
-func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (children []Node, pos *Range) {
+func (p *stackParser) leafChildren(c *container, attrsFrom int, s stand) (children []ast.Node, pos *ast.Range) {
 	children, _ = p.leafInlines(attrsFrom, true)
 	if p.trackPos {
-		pos = &Range{Start: c.start, End: leafEnd(c, children, s)}
+		pos = &ast.Range{Start: c.start, End: leafEnd(c, children, s)}
 	}
 	return children, pos
 }
 
 // leafPara is a paragraph over the open leaf.
-func (p *stackParser) leafPara(c *container, attrsFrom int, s stand) *Para {
+func (p *stackParser) leafPara(c *container, attrsFrom int, s stand) *ast.Para {
 	children, pos := p.leafChildren(c, attrsFrom, s)
-	return &Para{Header: Header{Pos: pos}, Children: children}
+	return &ast.Para{Header: ast.Header{Pos: pos}, Children: children}
 }
 
 // leafEnd is where a paragraph, heading or caption ends: a caption one
 // before where the parser stands; the others after their last byte that is
 // not a trailing space or, ending in a hard break, at the next line's first
 // byte (a heading's first bare '#' line).
-func leafEnd(c *container, children []Node, s stand) SourcePos {
+func leafEnd(c *container, children []ast.Node, s stand) ast.SourcePos {
 	if c.kind == kindCaption {
 		return s.before
 	}
-	if _, ok := lastNode(children).(*HardBreak); ok {
+	if _, ok := lastNode(children).(*ast.HardBreak); ok {
 		if c.kind == kindHeading && c.data.bareAt != nil {
 			return *c.data.bareAt
 		}
@@ -1047,18 +1049,18 @@ func leafEnd(c *container, children []Node, s stand) SourcePos {
 // afterContent is one past the last byte of l that is not a trailing
 // space: its newline unless spaces trail. A trailing tab is content, as
 // djot.js.
-func afterContent(l srcLine) SourcePos {
+func afterContent(l srcLine) ast.SourcePos {
 	return afterBlanks(l, " ")
 }
 
 // afterBlanks is where l's content ends with blanks stripped from its end:
 // its newline when none trail, else one past the last other byte.
-func afterBlanks(l srcLine, blanks string) SourcePos {
+func afterBlanks(l srcLine, blanks string) ast.SourcePos {
 	trimmed := len(strings.TrimRight(l.text, blanks))
 	if trimmed == len(l.text) {
 		return l.eol
 	}
-	return SourcePos{Line: l.pos.Line, Col: trimmed + 1, Offset: l.pos.Offset + trimmed}
+	return ast.SourcePos{Line: l.pos.Line, Col: trimmed + 1, Offset: l.pos.Offset + trimmed}
 }
 
 // closeFrom closes the open containers past the first from, innermost
@@ -1070,7 +1072,7 @@ func (p *stackParser) closeFrom(from int, s stand) {
 }
 
 // lastNode is the last of nodes, or nil.
-func lastNode(nodes []Node) Node {
+func lastNode(nodes []ast.Node) ast.Node {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -1078,9 +1080,9 @@ func lastNode(nodes []Node) Node {
 }
 
 // spanned sets n's range when positions are tracked.
-func (p *stackParser) spanned(n Node, start, end SourcePos) Node {
+func (p *stackParser) spanned(n ast.Node, start, end ast.SourcePos) ast.Node {
 	if p.trackPos {
-		n.header().Pos = &Range{Start: start, End: end}
+		ast.HeaderOf(n).Pos = &ast.Range{Start: start, End: end}
 	}
 	return n
 }
@@ -1093,7 +1095,7 @@ func (p *stackParser) close(s stand) {
 	p.listEvent(t.kind == kindList, t.kind == kindListItem)
 	p.stack = p.stack[:len(p.stack)-1]
 	c := t
-	var n Node
+	var n ast.Node
 	switch c.kind {
 	case kindPara:
 		// A failed attribute block that a line turned into a paragraph takes
@@ -1108,7 +1110,7 @@ func (p *stackParser) close(s stand) {
 	case kindHeading:
 		// Its inline ids are registered first, then the heading's own.
 		children, pos := p.leafChildren(c, 0, s)
-		h := &Heading{Header: Header{Pos: pos}, Level: c.data.level, Children: children}
+		h := &ast.Heading{Header: ast.Header{Pos: pos}, Level: c.data.level, Children: children}
 		explicit := ""
 		if ba := *p.attrsSlot(); ba != nil {
 			explicit = ba.id
@@ -1116,7 +1118,7 @@ func (p *stackParser) close(s stand) {
 		p.doc.ids.heading(h, explicit)
 		n = h
 	case kindThematicBreak:
-		n = p.spanned(&ThematicBreak{}, c.start, *c.data.end)
+		n = p.spanned(&ast.ThematicBreak{}, c.start, *c.data.end)
 	case kindAttributes:
 		slot := p.attrsSlot()
 		if a := c.data.attrs; a != nil {
@@ -1141,7 +1143,7 @@ func (p *stackParser) close(s stand) {
 		}
 		n = p.leafPara(c, p.failedAttrsFrom(), s)
 	case kindBlockQuote:
-		n = p.spanned(&BlockQuote{Children: c.children}, c.start, s.pos)
+		n = p.spanned(&ast.BlockQuote{Children: c.children}, c.start, s.pos)
 	case kindFootnote:
 		// Recorded for the document, with the block attributes waiting
 		// before it.
@@ -1149,7 +1151,7 @@ func (p *stackParser) close(s stand) {
 		slot := p.attrsSlot()
 		def := &footnoteDef{blocks: c.children, attrs: *slot}
 		if p.trackPos {
-			def.pos = &Range{Start: c.start, End: s.pos}
+			def.pos = &ast.Range{Start: c.start, End: s.pos}
 		}
 		*slot = nil
 		p.doc.defs.defineFootnote(c.data.label, def)
@@ -1159,9 +1161,9 @@ func (p *stackParser) close(s stand) {
 		if c.data.end != nil {
 			end = *c.data.end
 		}
-		div := &Div{Children: c.children}
+		div := &ast.Div{Children: c.children}
 		if c.data.class != "" {
-			div.Attrs = []Attr{{"class", c.data.class}}
+			div.Attrs = []ast.Attr{{Key: "class", Value: c.data.class}}
 		}
 		n = p.spanned(div, c.start, end)
 	case kindCodeBlock:
@@ -1172,9 +1174,9 @@ func (p *stackParser) close(s stand) {
 		}
 		lang := c.data.fence.lang
 		if strings.HasPrefix(lang, "=") {
-			n = &RawBlock{Format: lang[1:], Text: text}
+			n = &ast.RawBlock{Format: lang[1:], Text: text}
 		} else {
-			n = &CodeBlock{Lang: lang, Text: text}
+			n = &ast.CodeBlock{Lang: lang, Text: text}
 		}
 		p.spanned(n, c.start, end)
 	case kindReferenceDefinition:
@@ -1197,8 +1199,8 @@ func (p *stackParser) close(s stand) {
 		n = p.spanned(p.itemNode(c), c.start, s.before)
 	case kindTable:
 		// djot.js gives every table a caption, empty until one follows it.
-		children := append([]Node{&Caption{}}, c.children...)
-		n = p.spanned(&Table{Children: children}, c.start, s.pos)
+		children := append([]ast.Node{&ast.Caption{}}, c.children...)
+		n = p.spanned(&ast.Table{Children: children}, c.start, s.pos)
 	case kindCaption:
 		p.closeCaption(c, s)
 		return
@@ -1208,7 +1210,7 @@ func (p *stackParser) close(s stand) {
 
 // closeAs appends n, with the block attributes waiting for it, to its
 // parent's children or the top-level blocks.
-func (p *stackParser) closeAs(n Node, s stand) {
+func (p *stackParser) closeAs(n ast.Node, s stand) {
 	slot := p.attrsSlot()
 	if ba := *slot; ba != nil {
 		applyBlockAttrs(n, *ba)
@@ -1236,7 +1238,7 @@ func (p *stackParser) closeAs(n Node, s stand) {
 // way.
 func (p *stackParser) closeCaption(c *container, s stand) {
 	children, pos := p.leafChildren(c, 0, s)
-	n := &Caption{Header: Header{Pos: pos}, Children: children}
+	n := &ast.Caption{Header: ast.Header{Pos: pos}, Children: children}
 	slot := p.attrsSlot()
 	ba := *slot
 	*slot = nil
@@ -1255,12 +1257,12 @@ func (p *stackParser) closeCaption(c *container, s stand) {
 
 // tableBefore is the last sibling, if a table: the table a caption closing
 // now joins.
-func (p *stackParser) tableBefore() *Table {
+func (p *stackParser) tableBefore() *ast.Table {
 	siblings := p.blocks
 	if len(p.stack) > 0 {
 		siblings = p.tip().children
 	}
-	t, _ := lastNode(siblings).(*Table)
+	t, _ := lastNode(siblings).(*ast.Table)
 	return t
 }
 
@@ -1268,21 +1270,21 @@ func (p *stackParser) tableBefore() *Table {
 // its tightness and first bullet, an ordered list with djot.js's style
 // (the style it settled on, in its delimiter) and its first marker's text,
 // from which its start is read, or a definition list.
-func (p *stackParser) listNodeOf(c *container) Node {
+func (p *stackParser) listNodeOf(c *container) ast.Node {
 	l := c.data.list
 	switch l.style {
 	case listTask:
-		return &TaskList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
+		return &ast.TaskList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 	case listDefinition:
-		return &DefinitionList{Children: c.children}
+		return &ast.DefinitionList{Children: c.children}
 	case listOrdered:
 		style := styleDecimal
 		if len(l.ordered.possible) > 0 {
 			style = l.ordered.possible[0]
 		}
-		return &OrderedList{Style: styleString(style, l.delim), Marker: l.markerText, Tight: l.tight, Children: c.children}
+		return &ast.OrderedList{Style: styleString(style, l.delim), Marker: l.markerText, Tight: l.tight, Children: c.children}
 	}
-	return &BulletList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
+	return &ast.BulletList{Style: string(rune(l.bullet)), Tight: l.tight, Children: c.children}
 }
 
 // itemNode is the node a closing item makes; its list is the tip. A
@@ -1290,19 +1292,19 @@ func (p *stackParser) listNodeOf(c *container) Node {
 // and the rest as the definition. Only the paragraph's inlines move, so a
 // block attribute on it (its id already registered) is not on the Term:
 // today's tree, which the corpus does not cover.
-func (p *stackParser) itemNode(c *container) Node {
+func (p *stackParser) itemNode(c *container) ast.Node {
 	switch p.tip().data.list.style {
 	case listTask:
-		return &TaskListItem{Checked: c.data.checked, Children: c.children}
+		return &ast.TaskListItem{Checked: c.data.checked, Children: c.children}
 	case listDefinition:
-		term, blocks := &Term{}, c.children
+		term, blocks := &ast.Term{}, c.children
 		if len(blocks) > 0 {
-			if para, ok := blocks[0].(*Para); ok {
+			if para, ok := blocks[0].(*ast.Para); ok {
 				term.Children = para.Children
 				blocks = blocks[1:]
 			}
 		}
-		return &DefinitionListItem{Children: []Node{term, &Definition{Children: blocks}}}
+		return &ast.DefinitionListItem{Children: []ast.Node{term, &ast.Definition{Children: blocks}}}
 	}
-	return &ListItem{Children: c.children}
+	return &ast.ListItem{Children: c.children}
 }

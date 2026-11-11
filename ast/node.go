@@ -1,7 +1,9 @@
-// Package gjot parses Djot markup into an AST and renders it as HTML, as
-// djot.js AST text, or back to Djot. It is a port of zjot and is proven
-// against zjot's vendored djot.js corpus (testdata/spec).
-package gjot
+// Package ast declares the Djot syntax tree that gjot.Parse produces and
+// gjot's renderers read: the Node interface, the Header every kind embeds,
+// the 49 node kinds, Walk, and the kinds' JSON form with UnmarshalNode. It
+// sits beside the gjot package as go/ast sits beside go/parser, and imports
+// only the standard library.
+package ast
 
 import "strings"
 
@@ -45,9 +47,9 @@ type Range struct {
 // Level 0. A renderer or consumer type-switches on the kind:
 //
 //	switch n := n.(type) {
-//	case *gjot.Heading:
+//	case *ast.Heading:
 //		// n.Level, n.Children
-//	case *gjot.Str:
+//	case *ast.Str:
 //		// n.Text
 //	}
 //
@@ -83,9 +85,15 @@ type Header struct {
 
 func (h *Header) header() *Header { return h }
 
-// writtenID is the id written on the node and whether one was, an empty
-// `id=""` included.
-func (h *Header) writtenID() (string, bool) {
+// HeaderOf returns the Header n embeds: the node's own, not a copy, so a
+// change made through it is a change to n.
+func HeaderOf(n Node) *Header { return n.header() }
+
+// WrittenID is the id written on the node and whether one was, an empty
+// `id=""` included: written is true with id "" for `id=""`, and false when
+// the source wrote no id. ID, by contrast, is the id the document gave the
+// node, written or generated.
+func (h *Header) WrittenID() (id string, written bool) {
 	for _, a := range h.Attrs {
 		if a.Key == "id" {
 			return a.Value, true
@@ -94,14 +102,15 @@ func (h *Header) writtenID() (string, bool) {
 	return "", false
 }
 
-// classList is the classes the node renders with.
-func (h *Header) classList() []string {
-	return strings.Fields(valueOf(h.Attrs, "class"))
+// ClassList is the classes the node renders with: its "class" attribute
+// split at white space, in written order.
+func (h *Header) ClassList() []string {
+	return strings.Fields(h.Attr("class"))
 }
 
 // HasClass reports whether class is among the node's rendered classes.
 func (h *Header) HasClass(class string) bool {
-	for _, c := range h.classList() {
+	for _, c := range h.ClassList() {
 		if c == class {
 			return true
 		}
@@ -269,9 +278,6 @@ type Str struct {
 	Header
 	Text   string
 	Source string
-	// off is the offset of Text in the inline source it was sliced from,
-	// plus one; 0 means Text is not a slice of it. Parse-time only.
-	off int
 }
 
 type SoftBreak struct{ Header }
@@ -504,16 +510,3 @@ var nodeKinds = func() map[Tag]func() Node {
 	}
 	return kinds
 }()
-
-// linkFields is what a link and an image share: a pointer to the
-// destination, to the reference and the children. ok is false for any other
-// kind.
-func linkFields(n Node) (dest **string, ref *string, children []Node, ok bool) {
-	switch n := n.(type) {
-	case *Link:
-		return &n.Destination, &n.Reference, n.Children, true
-	case *Image:
-		return &n.Destination, &n.Reference, n.Children, true
-	}
-	return nil, nil, nil, false
-}
