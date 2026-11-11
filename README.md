@@ -2,7 +2,7 @@
 
 A [Djot](https://djot.net/) library for Go: parser, HTML renderer with a
 div/span hook, Djot writer, and a JSON-serialisable AST. gjot is a port of
-[zjot](https://github.com/quiteclose/zjot) and is tested against the corpus
+[zjot](https://github.com/devselfio/zjot) and is tested against the corpus
 zjot ships: the 28 `.test` files of zjot v2.0.0 (the 26
 [djot.js](https://github.com/jgm/djot.js) suite files it vendors plus its own
 `grid.test` and `zjot.test`), pinned in `testdata/spec/ORIGIN.md`.
@@ -56,11 +56,11 @@ go run ./cmd/gjot --djot document.dj
 ## Library usage
 
 ```sh
-go get github.com/quiteclose/gjot
+go get github.com/devselfio/gjot
 ```
 
 ```go
-import "github.com/quiteclose/gjot"
+import "github.com/devselfio/gjot"
 
 doc := gjot.Parse([]byte("Hello *world*"))
 html, err := gjot.HTML(doc)
@@ -394,3 +394,6 @@ cmd/driftcheck   Corpus drift check against zjot
     decodes a document. A hook or a consumer that read `n.Tag` and fields
     now type-switches: `switch n := n.(type) { case *gjot.Heading: ... }`
     (see Library usage).
+- 2026-11-10. Breaking change: the module and import path is now
+  `github.com/devselfio/gjot`. Update existing import statements and install
+  commands before upgrading.

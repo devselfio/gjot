@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/quiteclose/gjot"
+	"github.com/devselfio/gjot"
 )
 
 const usage = `Usage: gjot [OPTIONS] [FILE]

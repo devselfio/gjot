@@ -184,7 +184,7 @@ func TestParseOriginRealFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Repository != "https://github.com/quiteclose/zjot" || o.Ref != "v2.0.0" {
+	if o.Repository != "https://github.com/devselfio/zjot" || o.Ref != "v2.0.0" {
 		t.Fatalf("got %+v", o)
 	}
 }
