@@ -142,10 +142,9 @@ func TestAppendJSONMatchesMarshal(t *testing.T) {
 		case *Image:
 			n.Destination, n.Reference, n.Children = &dest, "r", kids
 		default:
-			if f := Children(n); f == nil {
-				break
+			if hasChildrenField(n) {
+				setChildren(n, kids)
 			}
-			setChildren(n, kids)
 		}
 		return n
 	}
@@ -165,10 +164,17 @@ func TestAppendJSONMatchesMarshal(t *testing.T) {
 		if again := appendJSON(nil, back); !bytes.Equal(again, want) {
 			t.Errorf("%s: decoded node encodes differently\n got %s\nwant %s", name, again, want)
 		}
+		if hasChildrenField(n) && len(Children(n)) != len(Children(back)) {
+			t.Errorf("%s: decoded node has %d children, want %d", name, len(Children(back)), len(Children(n)))
+		}
 	}
 	for tag, mk := range nodeKinds {
 		check(string(tag)+" (zero)", mk())
-		check(string(tag)+" (full)", full(mk()))
+		f := full(mk())
+		if hasChildrenField(f) && len(Children(f)) == 0 {
+			t.Errorf("%s (full): container fixture has no children", tag)
+		}
+		check(string(tag)+" (full)", f)
 	}
 	empty := ""
 	check("nested", &Section{Children: []Node{
@@ -186,4 +192,10 @@ func TestAppendJSONMatchesMarshal(t *testing.T) {
 // TestAppendJSONMatchesMarshal does not list.
 func setChildren(n Node, kids []Node) {
 	reflect.ValueOf(n).Elem().FieldByName("Children").Set(reflect.ValueOf(kids))
+}
+
+// hasChildrenField reports whether n's kind is a container, one with a
+// Children field, whether or not that field is set yet.
+func hasChildrenField(n Node) bool {
+	return reflect.ValueOf(n).Elem().FieldByName("Children").IsValid()
 }
