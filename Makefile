@@ -19,8 +19,8 @@ spec-count: ## Print the spec corpus pass count
 spec-drift: ## Check the spec corpus against SHA256SUMS and, when online, zjot at the pinned tag
 	$(GO) run ./cmd/driftcheck
 
-bench: ## Run the benchmarks: the corpus and testdata/bench/page.dj through Parse, HTML, ASTText, Djot and JSON
-	$(GO) test -run '^$$' -bench . -benchmem .
+bench: ## Run the benchmarks: the corpus and testdata/bench/page.dj through Parse, HTML, ASTText, Djot and JSON, and the inline opener stack
+	$(GO) test -run '^$$' -bench . -benchmem ./...
 
 check: ## gofmt, go vet and go mod tidy -diff (the CI gate)
 	@unformatted=$$(gofmt -l .); \

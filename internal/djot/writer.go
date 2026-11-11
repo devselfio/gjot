@@ -1,10 +1,12 @@
-package gjot
+package djot
 
 import (
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // Djot writes doc back as Djot source. The result re-parses to the same
@@ -12,11 +14,11 @@ import (
 // definitions are written as inline destinations and footnote definitions
 // with their labels, where the ids their headings generated demand it
 // (due), else after the document.
-func Djot(doc Node) []byte {
-	d := &djotWriter{ids: newIDs(), claims: map[Node]*idClaims{}}
-	var body []Node
-	for _, b := range childrenOf(doc) {
-		if f, ok := b.(*Footnote); ok {
+func Djot(doc ast.Node) []byte {
+	d := &djotWriter{ids: newIDs(), claims: map[ast.Node]*idClaims{}}
+	var body []ast.Node
+	for _, b := range ast.Children(doc) {
+		if f, ok := b.(*ast.Footnote); ok {
 			d.defs = append(d.defs, f)
 		} else {
 			body = append(body, b)
@@ -49,10 +51,10 @@ type djotWriter struct {
 	// they are written (placed); bound is the index of the definition being
 	// written, or len(defs) outside one, since a definition nests only in
 	// one that closes after it. claims memoizes idClaims by node.
-	defs   []*Footnote
+	defs   []*ast.Footnote
 	placed []bool
 	bound  int
-	claims map[Node]*idClaims
+	claims map[ast.Node]*idClaims
 }
 
 type refDefOut struct {
@@ -77,7 +79,7 @@ func (d *djotWriter) defineRef(label, url string) bool {
 
 // blocks renders sibling blocks as lines with one blank line between, the
 // footnote definitions due before a block written before it.
-func (d *djotWriter) blocks(blocks []Node) []string {
+func (d *djotWriter) blocks(blocks []ast.Node) []string {
 	var lines []string
 	for i, b := range blocks {
 		if i > 0 {
@@ -102,7 +104,7 @@ func joinBlocks(a, b []string) []string {
 
 // attrLines is a block's attribute line, none when it has no attributes,
 // its id registered where the line stands.
-func (d *djotWriter) attrLines(n Node) []string {
+func (d *djotWriter) attrLines(n ast.Node) []string {
 	a := attrSet(n)
 	if a == "" {
 		return nil
@@ -128,8 +130,8 @@ func indented(lines []string, first, rest, blank string) []string {
 	return out
 }
 
-func (d *djotWriter) block(n Node) []string {
-	if sec, ok := n.(*Section); ok {
+func (d *djotWriter) block(n ast.Node) []string {
+	if sec, ok := n.(*ast.Section); ok {
 		if len(sec.Children) > 0 && isHeading(sec.Children[0]) {
 			return d.blocks(unsectioned(sec))
 		}
@@ -137,13 +139,13 @@ func (d *djotWriter) block(n Node) []string {
 	}
 	lines := d.attrLines(n)
 	switch n := n.(type) {
-	case *Footnote:
+	case *ast.Footnote:
 		return append(lines, d.footnote(n, d.blocks(n.Children))...)
-	case *OrderedList:
+	case *ast.OrderedList:
 		return append(lines, d.orderedList(n)...)
-	case *Para:
+	case *ast.Para:
 		return append(lines, d.leafLines(n.Children, "")...)
-	case *Heading:
+	case *ast.Heading:
 		hashes := strings.Repeat("#", n.Level)
 		carriers, explicit := d.headingID(n)
 		if explicit {
@@ -155,23 +157,23 @@ func (d *djotWriter) block(n Node) []string {
 			return append(lines, hashes)
 		}
 		return append(lines, indented(d.leafLines(n.Children, carriers), hashes+" ", hashes+" ", "")...)
-	case *ThematicBreak:
+	case *ast.ThematicBreak:
 		return append(lines, "* * *")
-	case *CodeBlock:
+	case *ast.CodeBlock:
 		open := ""
 		if n.Lang != "" {
 			open = " " + n.Lang
 		}
 		return append(lines, fenced(n.Text, open)...)
-	case *RawBlock:
+	case *ast.RawBlock:
 		return append(lines, fenced(n.Text, "="+n.Format)...)
-	case *BlockQuote:
+	case *ast.BlockQuote:
 		inner := d.blocks(n.Children)
 		if len(inner) == 0 {
 			return append(lines, ">")
 		}
 		return append(lines, indented(inner, "> ", "> ", ">")...)
-	case *Div:
+	case *ast.Div:
 		inner := d.blocks(n.Children)
 		fence := strings.Repeat(":", fenceLength(inner, ':'))
 		open := fence
@@ -181,22 +183,22 @@ func (d *djotWriter) block(n Node) []string {
 		lines = append(lines, open)
 		lines = append(lines, inner...)
 		return append(lines, fence)
-	case *BulletList:
+	case *ast.BulletList:
 		return append(lines, d.bulletItems(n.Style, n.Tight, n.Children)...)
-	case *TaskList:
+	case *ast.TaskList:
 		return append(lines, d.bulletItems(n.Style, n.Tight, n.Children)...)
-	case *DefinitionList:
+	case *ast.DefinitionList:
 		for i, item := range n.Children {
 			if i > 0 {
 				lines = append(lines, "")
 			}
-			var term *Term
-			var def *Definition
-			for _, c := range childrenOf(item) {
+			var term *ast.Term
+			var def *ast.Definition
+			for _, c := range ast.Children(item) {
 				switch c := c.(type) {
-				case *Term:
+				case *ast.Term:
 					term = c
-				case *Definition:
+				case *ast.Definition:
 					def = c
 				}
 			}
@@ -211,14 +213,14 @@ func (d *djotWriter) block(n Node) []string {
 			}
 		}
 		return lines
-	case *Table:
+	case *ast.Table:
 		return append(lines, d.table(n)...)
 	}
 	return lines
 }
 
-func isHeading(n Node) bool {
-	_, ok := n.(*Heading)
+func isHeading(n ast.Node) bool {
+	_, ok := n.(*ast.Heading)
 	return ok
 }
 
@@ -236,13 +238,13 @@ func fenced(text, info string) []string {
 
 // bulletItems renders a bullet or task list's items under its bullet
 // (style), a task list item's with its check box.
-func (d *djotWriter) bulletItems(style string, tight bool, items []Node) []string {
+func (d *djotWriter) bulletItems(style string, tight bool, items []ast.Node) []string {
 	marker := style
 	if marker == "" {
 		marker = "-"
 	}
-	return d.listItems(items, tight, func(_ int, item Node) (string, string) {
-		t, ok := item.(*TaskListItem)
+	return d.listItems(items, tight, func(_ int, item ast.Node) (string, string) {
+		t, ok := item.(*ast.TaskListItem)
 		switch {
 		case !ok:
 			return marker, "  "
@@ -260,14 +262,14 @@ func (d *djotWriter) bulletItems(style string, tight bool, items []Node) []strin
 // reference or footnote definition, a dropped block attribute or caption)
 // after a blank line in the item, so the item ends with `{}` after a blank
 // line, which reads back as nothing and keeps the list loose.
-func (d *djotWriter) listItems(items []Node, tight bool, markerOf func(i int, item Node) (marker, indent string)) []string {
+func (d *djotWriter) listItems(items []ast.Node, tight bool, markerOf func(i int, item ast.Node) (marker, indent string)) []string {
 	var lines []string
 	for i, item := range items {
 		if i > 0 && !tight {
 			lines = append(lines, "")
 		}
 		marker, indent := markerOf(i, item)
-		blocks := childrenOf(item)
+		blocks := ast.Children(item)
 		lines = append(lines, d.item(blocks, marker, indent)...)
 		if !tight && len(items) == 1 && len(blocks) <= 1 {
 			lines = append(lines, "", indent+"{}")
@@ -280,12 +282,12 @@ func (d *djotWriter) listItems(items []Node, tight bool, markerOf func(i int, it
 // the marker's line and the rest indented by rest. A thematic break goes
 // under a bare marker instead: the marker and `* * *` on one line read as a
 // thematic break.
-func (d *djotWriter) item(blocks []Node, marker, rest string) []string {
+func (d *djotWriter) item(blocks []ast.Node, marker, rest string) []string {
 	inner := d.blocks(blocks)
 	if len(inner) == 0 {
 		return []string{marker}
 	}
-	if _, ok := blocks[0].(*ThematicBreak); ok {
+	if _, ok := blocks[0].(*ast.ThematicBreak); ok {
 		return append([]string{marker}, indented(inner, rest, rest, "")...)
 	}
 	return indented(inner, marker+" ", rest, "")
@@ -306,13 +308,13 @@ func fenceLength(lines []string, char byte) int {
 // orderedList writes the items with markers counted from the list's start
 // in its style and delimiter, so the list re-parses to the same style and
 // start and stays apart from a neighbour of another delimiter.
-func (d *djotWriter) orderedList(n *OrderedList) []string {
+func (d *djotWriter) orderedList(n *ast.OrderedList) []string {
 	style, delim, ok := parseStyleString(n.Style)
 	if !ok {
 		style, delim = styleDecimal, delimPeriod
 	}
 	start := orderedStart(n)
-	return d.listItems(n.Children, n.Tight, func(i int, _ Node) (string, string) {
+	return d.listItems(n.Children, n.Tight, func(i int, _ ast.Node) (string, string) {
 		marker := orderedMarker(start+i, style, delim)
 		if marker == "" {
 			marker = orderedMarker(start, style, delim)
@@ -369,16 +371,16 @@ func roman(num int) string {
 	return b.String()
 }
 
-func (d *djotWriter) table(n *Table) []string {
+func (d *djotWriter) table(n *ast.Table) []string {
 	var lines []string
-	var caption *Caption
+	var caption *ast.Caption
 	first := true
 	for _, c := range n.Children {
-		if c, ok := c.(*Caption); ok {
+		if c, ok := c.(*ast.Caption); ok {
 			caption = c
 			continue
 		}
-		row, ok := c.(*Row)
+		row, ok := c.(*ast.Row)
 		if !ok {
 			continue
 		}
@@ -388,7 +390,7 @@ func (d *djotWriter) table(n *Table) []string {
 		first = false
 		cells := make([]string, len(row.Children))
 		for i, c := range row.Children {
-			cells[i] = d.inlines(childrenOf(c))
+			cells[i] = d.inlines(ast.Children(c))
 		}
 		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
 		if row.Head {
@@ -412,31 +414,31 @@ func (d *djotWriter) table(n *Table) []string {
 }
 
 // cellAlign is a row's child's alignment, "" for anything but a cell.
-func cellAlign(c Node) CellAlign {
-	if c, ok := c.(*Cell); ok {
+func cellAlign(c ast.Node) ast.CellAlign {
+	if c, ok := c.(*ast.Cell); ok {
 		return c.Align
 	}
 	return ""
 }
 
-func hasAlignment(row *Row) bool {
+func hasAlignment(row *ast.Row) bool {
 	for _, c := range row.Children {
-		if a := cellAlign(c); a != "" && a != AlignDefault {
+		if a := cellAlign(c); a != "" && a != ast.AlignDefault {
 			return true
 		}
 	}
 	return false
 }
 
-func separatorLine(row *Row) string {
+func separatorLine(row *ast.Row) string {
 	cells := make([]string, len(row.Children))
 	for i, c := range row.Children {
 		switch cellAlign(c) {
-		case AlignLeft:
+		case ast.AlignLeft:
 			cells[i] = ":--"
-		case AlignRight:
+		case ast.AlignRight:
 			cells[i] = "--:"
-		case AlignCenter:
+		case ast.AlignCenter:
 			cells[i] = ":-:"
 		default:
 			cells[i] = "---"
@@ -449,7 +451,7 @@ func separatorLine(row *Row) string {
 // content indented by the marker's width so a code block keeps its
 // indentation relative to its fence (the footnote's lines need only be
 // indented past the label's).
-func (d *djotWriter) footnote(n *Footnote, inner []string) []string {
+func (d *djotWriter) footnote(n *ast.Footnote, inner []string) []string {
 	marker := "[^" + n.Label + "]:"
 	if len(inner) == 0 {
 		return []string{marker}
@@ -461,20 +463,20 @@ func (d *djotWriter) footnote(n *Footnote, inner []string) []string {
 // attributes the document moved onto the section (document.sections), so
 // the heading writes them and registers them where it stands. The heading
 // is copied, not changed in place.
-func unsectioned(sec *Section) []Node {
-	h := *sec.Children[0].(*Heading)
+func unsectioned(sec *ast.Section) []ast.Node {
+	h := *sec.Children[0].(*ast.Heading)
 	h.ID, h.AutoID = sec.ID, sec.AutoID
-	h.Attrs = append(append([]Attr{}, sec.Attrs...), h.Attrs...)
-	return append([]Node{&h}, sec.Children[1:]...)
+	h.Attrs = append(append([]ast.Attr{}, sec.Attrs...), h.Attrs...)
+	return append([]ast.Node{&h}, sec.Children[1:]...)
 }
 
 // autoID reports whether n's ID was generated: only a heading's or a
 // section's can be.
-func autoID(n Node) bool {
+func autoID(n ast.Node) bool {
 	switch n := n.(type) {
-	case *Heading:
+	case *ast.Heading:
 		return n.AutoID
-	case *Section:
+	case *ast.Section:
 		return n.AutoID
 	}
 	return false
@@ -482,9 +484,9 @@ func autoID(n Node) bool {
 
 // explicitID is the id a node's attribute set writes, "" when none: the
 // written one, else the id the document gave the node when not generated.
-func explicitID(n Node) string {
-	h := n.header()
-	if id, written := h.writtenID(); written {
+func explicitID(n ast.Node) string {
+	h := ast.HeaderOf(n)
+	if id, written := h.WrittenID(); written {
 		return id
 	}
 	if !autoID(n) {
@@ -517,7 +519,7 @@ func explicitID(n Node) string {
 // When the id cannot be generated any more (a tree built by hand that
 // numbers headings out of order) explicit is set and the caller writes the
 // id on the heading.
-func (d *djotWriter) headingID(n *Heading) (carriers string, explicit bool) {
+func (d *djotWriter) headingID(n *ast.Heading) (carriers string, explicit bool) {
 	text := stringContent(n.Children, false)
 	if n.ID == "" {
 		d.ids.generate(text)
@@ -587,7 +589,7 @@ type idClaims struct {
 	explicit  map[string]bool
 }
 
-func (d *djotWriter) claimsOf(n Node) *idClaims {
+func (d *djotWriter) claimsOf(n ast.Node) *idClaims {
 	if c, ok := d.claims[n]; ok {
 		return c
 	}
@@ -597,16 +599,16 @@ func (d *djotWriter) claimsOf(n Node) *idClaims {
 	return c
 }
 
-func (c *idClaims) collect(n Node) {
+func (c *idClaims) collect(n ast.Node) {
 	switch n := n.(type) {
-	case *Section:
+	case *ast.Section:
 		if len(n.Children) > 0 && isHeading(n.Children[0]) {
 			for _, b := range unsectioned(n) {
 				c.collect(b)
 			}
 			return
 		}
-	case *Heading:
+	case *ast.Heading:
 		if n.AutoID && n.ID != "" {
 			if g, ok := idTarget(stringContent(n.Children, false), n.ID); ok {
 				c.generated = append(c.generated, g)
@@ -616,7 +618,7 @@ func (c *idClaims) collect(n Node) {
 	if id := explicitID(n); id != "" {
 		c.explicit[id] = true
 	}
-	for _, ch := range childrenOf(n) {
+	for _, ch := range ast.Children(n) {
 		c.collect(ch)
 	}
 }
@@ -624,7 +626,7 @@ func (c *idClaims) collect(n Node) {
 // before reports whether an id a's headings generate must be registered
 // before b is re-parsed: b writes it, or a heading of b generated an id
 // that needed it taken.
-func (d *djotWriter) before(a, b Node) bool {
+func (d *djotWriter) before(a, b ast.Node) bool {
 	ca, cb := d.claimsOf(a), d.claimsOf(b)
 	for _, g := range ca.generated {
 		if cb.explicit[g.id] {
@@ -644,7 +646,7 @@ func (d *djotWriter) before(a, b Node) bool {
 // of those (the definitions are in closing order, which the re-parse must
 // see again), and every later definition one of those must follow, which
 // it then nests in.
-func (d *djotWriter) due(next Node) []string {
+func (d *djotWriter) due(next ast.Node) []string {
 	k := -1
 	for i := 0; i < d.bound; i++ {
 		if !d.placed[i] && d.before(d.defs[i], next) {
@@ -668,7 +670,7 @@ func (d *djotWriter) due(next Node) []string {
 // for one that must follow next (it stands inside next, as do those after
 // it) and for one that must follow a later definition up to k (it nests
 // there, written at its end at the latest).
-func (d *djotWriter) place(k int, next Node) []string {
+func (d *djotWriter) place(k int, next ast.Node) []string {
 	var lines []string
 	for i := 0; i <= k; i++ {
 		if d.placed[i] {
@@ -705,10 +707,10 @@ func (d *djotWriter) definition(i int) []string {
 // no attribute wrote first; a generated id is left out, as is the class a
 // div's fence carries. An id or class the short form cannot spell, an empty
 // id among them, is written as its key.
-func attrSet(n Node) string {
-	h := n.header()
+func attrSet(n ast.Node) string {
+	h := ast.HeaderOf(n)
 	attrs := h.Attrs
-	if isKind[*Div](n) {
+	if isKind[*ast.Div](n) {
 		attrs = withoutLastClass(attrs, divFenceClass(n))
 	}
 	var parts []string
@@ -764,8 +766,8 @@ func allWords(words []string, ok func(byte) bool) bool {
 // last attribute, since the fence class joins after the block attribute
 // before it (`{.x}` then `::: y` reads back as `class="x y"`; `{.y k=v}`
 // then `:::` keeps its order only with `.y` in the attribute line).
-func divFenceClass(n Node) string {
-	attrs := n.header().Attrs
+func divFenceClass(n ast.Node) string {
+	attrs := ast.HeaderOf(n).Attrs
 	if len(attrs) == 0 || attrs[len(attrs)-1].Key != "class" {
 		return ""
 	}
@@ -778,14 +780,14 @@ func divFenceClass(n Node) string {
 
 // withoutLastClass is attrs with the class divFenceClass writes on the
 // fence taken off; the class entry goes when that was its only class.
-func withoutLastClass(attrs []Attr, fenceClass string) []Attr {
+func withoutLastClass(attrs []ast.Attr, fenceClass string) []ast.Attr {
 	if fenceClass == "" {
 		return attrs
 	}
-	out := append([]Attr{}, attrs[:len(attrs)-1]...)
+	out := append([]ast.Attr{}, attrs[:len(attrs)-1]...)
 	last := attrs[len(attrs)-1]
 	if words := strings.Fields(last.Value); len(words) > 1 {
-		out = append(out, Attr{"class", strings.Join(words[:len(words)-1], " ")})
+		out = append(out, ast.Attr{Key: "class", Value: strings.Join(words[:len(words)-1], " ")})
 	}
 	return out
 }
@@ -825,13 +827,13 @@ type inlineWriter struct {
 // not trimmed, and a trailing hard break is written as its backslash alone,
 // which ends the leaf. prefix opens the leaf (a heading's id carriers),
 // written where the inlines see it: a quote after it is not at a line's start.
-func (d *djotWriter) leafLines(nodes []Node, prefix string) []string {
+func (d *djotWriter) leafLines(nodes []ast.Node, prefix string) []string {
 	w := newInlineWriter(d, true)
 	w.write(prefix)
 	w.nodes(nodes)
 	text := w.b.String()
 	switch {
-	case len(nodes) > 0 && isKind[*HardBreak](nodes[len(nodes)-1]):
+	case len(nodes) > 0 && isKind[*ast.HardBreak](nodes[len(nodes)-1]):
 		text = strings.TrimSuffix(text, "\n")
 	case strings.HasSuffix(text, "\n"), strings.HasSuffix(text, " "):
 		text += "{}"
@@ -839,7 +841,7 @@ func (d *djotWriter) leafLines(nodes []Node, prefix string) []string {
 	return strings.Split(text, "\n")
 }
 
-func (d *djotWriter) inlines(nodes []Node) string {
+func (d *djotWriter) inlines(nodes []ast.Node) string {
 	w := newInlineWriter(d, true)
 	w.nodes(nodes)
 	return w.b.String()
@@ -867,10 +869,10 @@ func (w *inlineWriter) prev() byte {
 	return s[len(s)-1]
 }
 
-func isText(n Node) bool { return isKind[*Str](n) }
+func isText(n ast.Node) bool { return isKind[*ast.Str](n) }
 
 // isKind reports whether n is of kind K.
-func isKind[K Node](n Node) bool {
+func isKind[K ast.Node](n ast.Node) bool {
 	_, ok := n.(K)
 	return ok
 }
@@ -883,16 +885,16 @@ func isKind[K Node](n Node) bool {
 // unclosed marked opener, an empty attribute, a smart quote's glyph) and
 // the written text keeps it. A smart quote carrying attributes is not text
 // but a quote (loneQuote).
-func (w *inlineWriter) nodes(nodes []Node) {
+func (w *inlineWriter) nodes(nodes []ast.Node) {
 	for i := 0; i < len(nodes); {
 		n := nodes[i]
 		j := i + 1
-		var next Node
+		var next ast.Node
 		if isText(n) && loneQuote(n) == "" {
 			var text strings.Builder
 			var apos, bounds []int
 			for j = i; j < len(nodes) && isText(nodes[j]) && loneQuote(nodes[j]) == ""; j++ {
-				t := nodes[j].(*Str)
+				t := nodes[j].(*ast.Str)
 				if t.Text == apostrophe && t.Source == "'" {
 					apos = append(apos, text.Len())
 				}
@@ -922,7 +924,7 @@ func (w *inlineWriter) nodes(nodes []Node) {
 // braced form is used otherwise, or always when nested is set. An empty
 // pair closes nothing, so empty content is written as an empty attribute,
 // which makes no node and keeps the delimiters apart.
-func (w *inlineWriter) delimited(n Node, char byte, braceOnly, nestedBraces bool) {
+func (w *inlineWriter) delimited(n ast.Node, char byte, braceOnly, nestedBraces bool) {
 	inner := w.content(n, char, false)
 	content := inner.b.String()
 	if content == "" {
@@ -953,7 +955,7 @@ func (w *inlineWriter) delimited(n Node, char byte, braceOnly, nestedBraces bool
 }
 
 // text writes a run of text; apos and bounds are as for escapeText.
-func (w *inlineWriter) text(text string, apos, bounds []int, next Node) {
+func (w *inlineWriter) text(text string, apos, bounds []int, next ast.Node) {
 	leadingBlanks := w.lineStart && text != "" && isInlineSpace(text[0])
 	if leadingBlanks {
 		w.write("{}") // the parser trims a line's leading whitespace
@@ -967,7 +969,7 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next Node) {
 	}
 	w.write(out)
 	// A line of blanks alone would read back as an empty attribute block.
-	if leadingBlanks && strings.TrimLeft(text, " \t") == "" && (next == nil || isKind[*SoftBreak](next)) {
+	if leadingBlanks && strings.TrimLeft(text, " \t") == "" && (next == nil || isKind[*ast.SoftBreak](next)) {
 		w.write("{}")
 	}
 }
@@ -978,8 +980,8 @@ func (w *inlineWriter) text(text string, apos, bounds []int, next Node) {
 // node's last word takes them). A right quote is a marked closer with no
 // marked opener to close, a left one an opener that pairs with nothing
 // (the plain " and the marked {'). "" for any other node.
-func loneQuote(n Node) string {
-	s, ok := n.(*Str)
+func loneQuote(n ast.Node) string {
+	s, ok := n.(*ast.Str)
 	if !ok || s.Source == "" || attrSet(n) == "" {
 		return ""
 	}
@@ -1001,7 +1003,7 @@ func loneQuote(n Node) string {
 // closer, and in rawQuote, so that an enclosing plain pair is braced too;
 // the marked opener is counted in openMarked. A right quote has one
 // spelling, which inside a braced pair of its quote closes that pair.
-func (w *inlineWriter) quote(n Node) {
+func (w *inlineWriter) quote(n ast.Node) {
 	spelling := loneQuote(n)
 	w.write(spelling)
 	w.attrs(n)
@@ -1024,14 +1026,14 @@ func (w *inlineWriter) adopt(inner *inlineWriter) {
 }
 
 // attrs writes n's attribute set and registers its id where it stands.
-func (w *inlineWriter) attrs(n Node) {
+func (w *inlineWriter) attrs(n ast.Node) {
 	w.write(attrSet(n))
 	w.d.ids.register(explicitID(n))
 }
 
-func (w *inlineWriter) node(n Node, next Node) {
+func (w *inlineWriter) node(n ast.Node, next ast.Node) {
 	switch n := n.(type) {
-	case *Str:
+	case *ast.Str:
 		// nodes, node's only caller, writes text runs itself; this case is
 		// kept so that a text node is never silently dropped.
 		if loneQuote(n) != "" {
@@ -1039,57 +1041,57 @@ func (w *inlineWriter) node(n Node, next Node) {
 		} else {
 			w.text(n.Text, nil, nil, next)
 		}
-	case *SoftBreak:
+	case *ast.SoftBreak:
 		w.write("\n")
-		if next != nil && isKind[*SoftBreak](next) {
+		if next != nil && isKind[*ast.SoftBreak](next) {
 			w.write("{}") // a line of its own, else the two breaks read as a blank line
 		}
-	case *HardBreak:
+	case *ast.HardBreak:
 		if isInlineSpace(w.prev()) {
 			w.write("{}") // the parser trims the blanks before a hard break
 		}
 		w.write("\\\n")
-	case *NonBreakingSpace:
+	case *ast.NonBreakingSpace:
 		w.write("\\ ")
-		if next == nil || isKind[*SoftBreak](next) || isKind[*HardBreak](next) {
+		if next == nil || isKind[*ast.SoftBreak](next) || isKind[*ast.HardBreak](next) {
 			w.write("{}")
 		}
-	case *Emph:
+	case *ast.Emph:
 		w.delimited(n, '_', false, false)
-	case *Strong:
+	case *ast.Strong:
 		w.delimited(n, '*', false, false)
-	case *Superscript:
+	case *ast.Superscript:
 		w.delimited(n, '^', false, true)
-	case *Subscript:
+	case *ast.Subscript:
 		w.delimited(n, '~', false, true)
-	case *Insert:
+	case *ast.Insert:
 		w.delimited(n, '+', true, false)
-	case *Delete:
+	case *ast.Delete:
 		w.delimited(n, '-', true, false)
-	case *Mark:
+	case *ast.Mark:
 		w.delimited(n, '=', true, false)
-	case *DoubleQuoted:
+	case *ast.DoubleQuoted:
 		w.delimited(n, '"', false, false)
-	case *SingleQuoted:
+	case *ast.SingleQuoted:
 		p := w.prev()
 		plainOK := p == 0 || strings.IndexByte(" \t\n\r\"'-([", p) >= 0
 		w.delimited(n, '\'', !plainOK, false)
-	case *Verbatim:
+	case *ast.Verbatim:
 		w.write(verbatim(n.Text))
 		w.attrs(n)
-	case *RawInline:
+	case *ast.RawInline:
 		w.write(verbatim(n.Text) + "{=" + n.Format + "}")
-	case *InlineMath:
+	case *ast.InlineMath:
 		w.write("$" + verbatim(n.Text))
 		w.attrs(n)
-	case *DisplayMath:
+	case *ast.DisplayMath:
 		w.write("$$" + verbatim(n.Text))
 		w.attrs(n)
-	case *Link:
+	case *ast.Link:
 		w.link("[", n, n.Destination, n.Reference, n.Children)
-	case *Image:
+	case *ast.Image:
 		w.link("![", n, n.Destination, n.Reference, n.Children)
-	case *Span:
+	case *ast.Span:
 		w.write("[")
 		w.bracketed(n.Children)
 		w.write("]")
@@ -1098,33 +1100,33 @@ func (w *inlineWriter) node(n Node, next Node) {
 		} else {
 			w.write("{}")
 		}
-	case *URL:
+	case *ast.URL:
 		w.write("<" + n.Text + ">")
 		w.attrs(n)
-	case *Email:
+	case *ast.Email:
 		w.write("<" + n.Text + ">")
 		w.attrs(n)
-	case *FootnoteReference:
+	case *ast.FootnoteReference:
 		// Its label; a written id is dropped, as the HTML drops it.
 		w.write("[^" + n.Label + "]")
-		w.attrs(&FootnoteReference{Header: Header{Attrs: n.Attrs}})
-	case *Symb:
+		w.attrs(&ast.FootnoteReference{Header: ast.Header{Attrs: n.Attrs}})
+	case *ast.Symb:
 		w.write(":" + n.Alias + ":")
 		w.attrs(n)
-	case *Ellipsis:
+	case *ast.Ellipsis:
 		w.write("...")
-	case *EmDash:
+	case *ast.EmDash:
 		w.dash("---")
-	case *EnDash:
+	case *ast.EnDash:
 		w.dash("--")
 	default:
-		w.nodes(childrenOf(n))
+		w.nodes(ast.Children(n))
 	}
 }
 
 // link writes a link or an image (open is "[" or "![") with its
 // destination, inline or by reference.
-func (w *inlineWriter) link(open string, n Node, dest *string, ref string, children []Node) {
+func (w *inlineWriter) link(open string, n ast.Node, dest *string, ref string, children []ast.Node) {
 	w.write(open)
 	w.bracketed(children)
 	w.write("]")
@@ -1150,14 +1152,14 @@ func (w *inlineWriter) dash(s string) {
 
 // content writes n's children for a pair of char around them, in the plain
 // form or the braced one, with the enclosing delimiters remembered.
-func (w *inlineWriter) content(n Node, char byte, braced bool) *inlineWriter {
+func (w *inlineWriter) content(n ast.Node, char byte, braced bool) *inlineWriter {
 	inner := w.child()
 	inner.open[char]++
 	if braced {
 		inner.openMarked[char]++
 	}
 	inner.closer = string(rune(char))
-	inner.nodes(childrenOf(n))
+	inner.nodes(ast.Children(n))
 	return inner
 }
 
@@ -1178,7 +1180,7 @@ func (w *inlineWriter) child() *inlineWriter {
 
 // bracketed writes link, image and span content. A lone quote written
 // inside is reported to the enclosing writer (see delimited).
-func (w *inlineWriter) bracketed(children []Node) {
+func (w *inlineWriter) bracketed(children []ast.Node) {
 	inner := w.child()
 	inner.closer = "]"
 	inner.inBrackets = true
@@ -1288,7 +1290,7 @@ func isSymbolChar(c byte) bool {
 // offsets of ’ that parsed from a ' and are written as ' again where that
 // reads back as an apostrophe (apostropheAfter); wrote reports whether one
 // was. bounds lists the offsets where a text node after the first starts.
-func (w *inlineWriter) escapeText(text string, next Node, apos, bounds []int) (string, bool) {
+func (w *inlineWriter) escapeText(text string, next ast.Node, apos, bounds []int) (string, bool) {
 	text, kinds, wrote := w.expand(text, apos, bounds)
 	after := w.after(next)
 	var b strings.Builder
@@ -1472,46 +1474,46 @@ func (w *inlineWriter) expand(text string, apos, bounds []int) (expanded string,
 // byte by), or with no next the enclosing closer. A pair that may be
 // written braced is given as its plain delimiter, which escapes at least
 // as much.
-func (w *inlineWriter) after(next Node) string {
+func (w *inlineWriter) after(next ast.Node) string {
 	if next == nil {
 		return w.closer
 	}
 	switch next.(type) {
-	case *Emph:
+	case *ast.Emph:
 		return "_"
-	case *Strong:
+	case *ast.Strong:
 		return "*"
-	case *Superscript:
+	case *ast.Superscript:
 		return "^"
-	case *Subscript:
+	case *ast.Subscript:
 		return "~"
-	case *Insert, *Delete, *Mark:
+	case *ast.Insert, *ast.Delete, *ast.Mark:
 		return "{"
-	case *DoubleQuoted:
+	case *ast.DoubleQuoted:
 		return "\""
-	case *SingleQuoted:
+	case *ast.SingleQuoted:
 		return "'"
-	case *Verbatim, *RawInline:
+	case *ast.Verbatim, *ast.RawInline:
 		return "`"
-	case *InlineMath:
+	case *ast.InlineMath:
 		return "$`"
-	case *DisplayMath:
+	case *ast.DisplayMath:
 		return "$$`"
-	case *Link, *Span, *FootnoteReference:
+	case *ast.Link, *ast.Span, *ast.FootnoteReference:
 		return "["
-	case *Image:
+	case *ast.Image:
 		return "!"
-	case *URL, *Email:
+	case *ast.URL, *ast.Email:
 		return "<"
-	case *Symb:
+	case *ast.Symb:
 		return ":"
-	case *Ellipsis:
+	case *ast.Ellipsis:
 		return "."
-	case *EmDash, *EnDash:
+	case *ast.EmDash, *ast.EnDash:
 		return "-"
-	case *SoftBreak:
+	case *ast.SoftBreak:
 		return "\n"
-	case *HardBreak, *NonBreakingSpace:
+	case *ast.HardBreak, *ast.NonBreakingSpace:
 		return "\\"
 	}
 	return ""
@@ -1564,7 +1566,7 @@ func braceOpensMarkup(tail string, run int) bool {
 // first bytes are unknown is taken to). No "}" comes after a leaf's last
 // run, unless it ends in a space, which leafLines keeps with an empty
 // attribute.
-func (w *inlineWriter) attrsCouldClose(tail string, next Node) bool {
+func (w *inlineWriter) attrsCouldClose(tail string, next ast.Node) bool {
 	switch feedAttr("{" + tail) {
 	case attrDone:
 		return true

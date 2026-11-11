@@ -1,4 +1,15 @@
-package gjot
+package ast
+
+// WalkStatus is what a Walk visitor, or a gjot.Hook's entering call,
+// returns to control the visit of the node's children.
+type WalkStatus int
+
+const (
+	// WalkContinue visits (or renders) the children.
+	WalkContinue WalkStatus = iota
+	// WalkSkipChildren leaves the children unvisited (or unrendered).
+	WalkSkipChildren
+)
 
 // Walk visits n and then its descendants in document order: a node
 // before its children, children in order, the footnote definitions after the
@@ -8,13 +19,14 @@ func Walk(n Node, visit func(n Node) WalkStatus) {
 	if visit(n) == WalkSkipChildren {
 		return
 	}
-	for _, c := range childrenOf(n) {
+	for _, c := range Children(n) {
 		Walk(c, visit)
 	}
 }
 
-// childrenOf is n's children, or nil for a kind that has none.
-func childrenOf(n Node) []Node {
+// Children returns n's children in order: the slice the node holds, not
+// a copy, or nil for a kind that has none (a leaf such as *Str).
+func Children(n Node) []Node {
 	switch n := n.(type) {
 	case *Section:
 		return n.Children

@@ -1,8 +1,10 @@
-package gjot
+package djot
 
 import (
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // document.go is what block syntax defines for the whole document and what
@@ -23,9 +25,9 @@ type refDefinition struct {
 // footnoteDef is a footnote definition: its blocks, the block attributes
 // written before it, and its source range when positions are tracked.
 type footnoteDef struct {
-	blocks []Node
+	blocks []ast.Node
 	attrs  *blockAttrs
-	pos    *Range
+	pos    *ast.Range
 }
 
 // definitions holds the reference and footnote definitions by normalized
@@ -68,12 +70,12 @@ func (t *ids) register(id string) {
 }
 
 // registerTree registers every explicit id in nodes' trees, in tree order.
-func (t *ids) registerTree(nodes []Node) {
+func (t *ids) registerTree(nodes []ast.Node) {
 	for _, n := range nodes {
-		if id := n.header().ID; id != "" && !autoID(n) {
+		if id := ast.HeaderOf(n).ID; id != "" && !autoID(n) {
 			t.register(id)
 		}
-		t.registerTree(childrenOf(n))
+		t.registerTree(ast.Children(n))
 	}
 }
 
@@ -143,7 +145,7 @@ func (t *ids) generate(text string) string {
 // its rendered text (stringContent, without footnote labels). The first
 // heading with a given text claims it as an implicit reference; a heading
 // whose text normalizes to nothing claims none.
-func (t *ids) heading(n *Heading, explicit string) {
+func (t *ids) heading(n *ast.Heading, explicit string) {
 	text := stringContent(n.Children, false)
 	if explicit != "" {
 		n.ID, n.AutoID = explicit, false
@@ -175,11 +177,11 @@ func newDocument(trackPos bool) *document {
 // known: sections, then the footnote definitions after them, then
 // references. end is where a section still open at the end ends (zjot
 // Sections: the last block's end, or the input's when lines follow it).
-func (d *document) finish(blocks []Node, end *SourcePos) *Section {
+func (d *document) finish(blocks []ast.Node, end *ast.SourcePos) *ast.Section {
 	blocks = d.sections(blocks, end)
 	blocks = append(blocks, d.footnotes()...)
 	d.resolve(blocks)
-	return &Section{Children: blocks}
+	return &ast.Section{Children: blocks}
 }
 
 // footnotes is every footnote definition as a Footnote node, as djot.js's
@@ -187,11 +189,11 @@ func (d *document) finish(blocks []Node, end *SourcePos) *Section {
 // as children, its span, and the block attributes written before it; in
 // the order the labels first closed. The HTML renderer numbers the endnotes
 // from these where the body references them.
-func (d *document) footnotes() []Node {
-	var nodes []Node
+func (d *document) footnotes() []ast.Node {
+	var nodes []ast.Node
 	for _, label := range d.defs.footnoteLabels {
 		def := d.defs.footnoteDefs[label]
-		n := &Footnote{Header: Header{Pos: def.pos}, Label: label, Children: def.blocks}
+		n := &ast.Footnote{Header: ast.Header{Pos: def.pos}, Label: label, Children: def.blocks}
 		if def.attrs != nil {
 			applyBlockAttrs(n, *def.attrs)
 		}
@@ -206,13 +208,13 @@ func (d *document) footnotes() []Node {
 // move only when they hold a non-empty id; otherwise they stay on the
 // heading. A section runs from its heading's start to the end of the
 // heading that closes it, or to end.
-func (d *document) sections(blocks []Node, end *SourcePos) []Node {
+func (d *document) sections(blocks []ast.Node, end *ast.SourcePos) []ast.Node {
 	type open struct {
-		sec *Section
+		sec *ast.Section
 	}
-	var result []Node
+	var result []ast.Node
 	var stack []open
-	add := func(n Node) {
+	add := func(n ast.Node) {
 		if len(stack) > 0 {
 			top := stack[len(stack)-1].sec
 			top.Children = append(top.Children, n)
@@ -220,7 +222,7 @@ func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 			result = append(result, n)
 		}
 	}
-	closeTop := func(at *SourcePos) {
+	closeTop := func(at *ast.SourcePos) {
 		top := stack[len(stack)-1].sec
 		stack = stack[:len(stack)-1]
 		if top.Pos != nil && at != nil {
@@ -229,12 +231,12 @@ func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 		add(top)
 	}
 	for _, n := range blocks {
-		b, ok := n.(*Heading)
+		b, ok := n.(*ast.Heading)
 		if !ok {
 			add(n)
 			continue
 		}
-		var closedAt *SourcePos
+		var closedAt *ast.SourcePos
 		if b.Pos != nil {
 			e := b.Pos.End
 			closedAt = &e
@@ -242,7 +244,7 @@ func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 		for len(stack) > 0 && stack[len(stack)-1].sec.Level >= b.Level {
 			closeTop(closedAt)
 		}
-		sec := &Section{Header: Header{ID: b.ID}, Level: b.Level, AutoID: b.AutoID}
+		sec := &ast.Section{Header: ast.Header{ID: b.ID}, Level: b.Level, AutoID: b.AutoID}
 		heading := *b
 		heading.ID, heading.AutoID = "", false
 		// A written non-empty id moves the heading's attributes to the
@@ -252,9 +254,9 @@ func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 			sec.Attrs, heading.Attrs = b.Attrs, nil
 		}
 		if b.Pos != nil {
-			sec.Pos = &Range{Start: b.Pos.Start, End: b.Pos.End}
+			sec.Pos = &ast.Range{Start: b.Pos.Start, End: b.Pos.End}
 		}
-		sec.Children = []Node{&heading}
+		sec.Children = []ast.Node{&heading}
 		stack = append(stack, open{sec})
 	}
 	for len(stack) > 0 {
@@ -265,7 +267,7 @@ func (d *document) sections(blocks []Node, end *SourcePos) []Node {
 
 // resolve fills in reference links and images from the definitions, else
 // from a heading's implicit reference. Nodes are updated in place.
-func (d *document) resolve(nodes []Node) {
+func (d *document) resolve(nodes []ast.Node) {
 	for _, n := range nodes {
 		if dest, ref, children, ok := linkFields(n); ok && *dest == nil {
 			raw := *ref
@@ -285,6 +287,19 @@ func (d *document) resolve(nodes []Node) {
 				*dest = &auto
 			}
 		}
-		d.resolve(childrenOf(n))
+		d.resolve(ast.Children(n))
 	}
+}
+
+// linkFields is what a link and an image share: a pointer to the
+// destination, to the reference and the children. ok is false for any other
+// kind.
+func linkFields(n ast.Node) (dest **string, ref *string, children []ast.Node, ok bool) {
+	switch n := n.(type) {
+	case *ast.Link:
+		return &n.Destination, &n.Reference, n.Children, true
+	case *ast.Image:
+		return &n.Destination, &n.Reference, n.Children, true
+	}
+	return nil, nil, nil, false
 }

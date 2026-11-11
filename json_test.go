@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // The JSON form of an AST carries everything the AST text does: marshal,
@@ -28,7 +30,7 @@ func TestJSONRoundTrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
-				back, err := UnmarshalNode(data)
+				back, err := ast.UnmarshalNode(data)
 				if err != nil {
 					t.Fatalf("%s:%d: %v", file, c.line, err)
 				}
@@ -63,7 +65,7 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		back, err := UnmarshalNode(data)
+		back, err := ast.UnmarshalNode(data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,16 +89,16 @@ func TestJSONKeepsSmartQuoteSource(t *testing.T) {
 
 // checkSourceOnlyOnQuotes fails unless every text node with a Source holds
 // one smart-quote glyph written as ' or ". (Only a text node has a Source.)
-func checkSourceOnlyOnQuotes(t *testing.T, where string, doc Node) {
+func checkSourceOnlyOnQuotes(t *testing.T, where string, doc ast.Node) {
 	t.Helper()
-	Walk(doc, func(n Node) WalkStatus {
-		if n, ok := n.(*Str); ok && n.Source != "" {
+	ast.Walk(doc, func(n ast.Node) ast.WalkStatus {
+		if n, ok := n.(*ast.Str); ok && n.Source != "" {
 			single := n.Source == "'" && (n.Text == "‘" || n.Text == "’")
 			double := n.Source == "\"" && (n.Text == "“" || n.Text == "”")
 			if !single && !double {
 				t.Errorf("%s: Source %q on str %q", where, n.Source, n.Text)
 			}
 		}
-		return WalkContinue
+		return ast.WalkContinue
 	})
 }

@@ -149,22 +149,11 @@ func TestAttributeOrder(t *testing.T) {
 // Endnotes are numbered as djot.js's HTML renderer numbers them: body
 // references in reading order, then every definition's references in
 // JavaScript's key order, array-index labels ascending first (zjot.test
-// L10160, L10192). A definition nothing references renders nothing; a
+// L10160, L10192; internal/djot's TestJSArrayIndex checks which labels are
+// array indexes). A definition nothing references renders nothing; a
 // reference to no definition gets an endnote with only its backlink; the
 // endnotes follow the whole document, not the definition's place.
 func TestFootnoteEndnotes(t *testing.T) {
-	for _, c := range []struct {
-		label string
-		index int
-		ok    bool
-	}{
-		{"0", 0, true}, {"10", 10, true}, {"4294967294", 4294967294, true},
-		{"4294967295", 0, false}, {"01", 0, false}, {"-1", 0, false}, {"", 0, false}, {"a", 0, false}, {"12345678901", 0, false},
-	} {
-		if i, ok := jsArrayIndex(c.label); i != c.index || ok != c.ok {
-			t.Errorf("jsArrayIndex(%q) = %d, %v; want %d, %v", c.label, i, ok, c.index, c.ok)
-		}
-	}
 	backlink := func(n string) string {
 		return "<a href=\"#fnref" + n + "\" role=\"doc-backlink\">↩︎</a>"
 	}

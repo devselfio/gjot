@@ -1,23 +1,27 @@
-package gjot
+package djot
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/devselfio/gjot/ast"
+)
 
 // ASTText renders doc in djot.js's indented AST text format, the format the
 // corpus compares against for its "a" cases.
-func ASTText(doc Node) []byte {
+func ASTText(doc ast.Node) []byte {
 	return appendAST(nil, doc, 0, true)
 }
 
-func appendAST(out []byte, n Node, indent int, isRoot bool) []byte {
+func appendAST(out []byte, n ast.Node, indent int, isRoot bool) []byte {
 	for i := 0; i < indent; i++ {
 		out = append(out, ' ')
 	}
-	if _, ok := n.(*Section); isRoot && ok {
+	if _, ok := n.(*ast.Section); isRoot && ok {
 		out = append(out, "doc"...)
 	} else {
 		out = append(out, n.Tag()...)
 	}
-	h := n.header()
+	h := ast.HeaderOf(n)
 	if p := h.Pos; p != nil {
 		out = append(out, " ("...)
 		out = appendPos(out, p.Start)
@@ -30,49 +34,49 @@ func appendAST(out []byte, n Node, indent int, isRoot bool) []byte {
 	// the kind's own attributes.
 	var lang string
 	switch n := n.(type) {
-	case *Symb:
+	case *ast.Symb:
 		if n.Alias != "" {
 			out = append(out, " alias="...)
 			out = appendQuoted(out, n.Alias)
 		}
-	case *Str:
+	case *ast.Str:
 		out = appendText(out, n.Text)
-	case *Verbatim:
+	case *ast.Verbatim:
 		out = appendText(out, n.Text)
-	case *RawInline:
-		out = appendText(out, n.Text)
-		lang = n.Format
-	case *RawBlock:
+	case *ast.RawInline:
 		out = appendText(out, n.Text)
 		lang = n.Format
-	case *CodeBlock:
+	case *ast.RawBlock:
+		out = appendText(out, n.Text)
+		lang = n.Format
+	case *ast.CodeBlock:
 		out = appendText(out, n.Text)
 		lang = n.Lang
-	case *FootnoteReference:
+	case *ast.FootnoteReference:
 		out = appendText(out, n.Label)
-	case *Heading:
+	case *ast.Heading:
 		out = append(out, " level="...)
 		out = strconv.AppendInt(out, int64(n.Level), 10)
-	case *Footnote:
+	case *ast.Footnote:
 		out = append(out, " label="...)
 		out = appendQuoted(out, n.Label)
-	case *BulletList:
+	case *ast.BulletList:
 		out = appendListAttrs(out, n.Tight, n.Style)
-	case *OrderedList:
+	case *ast.OrderedList:
 		out = appendListAttrs(out, n.Tight, n.Style)
-	case *TaskListItem:
+	case *ast.TaskListItem:
 		out = appendBool(out, " checked=", n.Checked)
-	case *Link:
+	case *ast.Link:
 		out = appendLinkAttrs(out, n.Destination, n.Reference)
-	case *Image:
+	case *ast.Image:
 		out = appendLinkAttrs(out, n.Destination, n.Reference)
-	case *Row:
+	case *ast.Row:
 		out = appendBool(out, " head=", n.Head)
-	case *Cell:
+	case *ast.Cell:
 		out = appendBool(out, " head=", n.Head)
 		align := n.Align
 		if align == "" {
-			align = AlignDefault
+			align = ast.AlignDefault
 		}
 		out = append(out, " align=\""...)
 		out = append(out, align...)
@@ -87,7 +91,7 @@ func appendAST(out []byte, n Node, indent int, isRoot bool) []byte {
 	// the rest in source order. The written id wins over a generated one, an
 	// empty `id=""` included (zjot ast.zig).
 	attrs := h.Attrs
-	if id, written := h.writtenID(); written || h.ID != "" {
+	if id, written := h.WrittenID(); written || h.ID != "" {
 		if !written {
 			id = h.ID
 		}
@@ -109,7 +113,7 @@ func appendAST(out []byte, n Node, indent int, isRoot bool) []byte {
 	}
 	out = append(out, '\n')
 
-	for _, c := range childrenOf(n) {
+	for _, c := range ast.Children(n) {
 		out = appendAST(out, c, indent+2, false)
 	}
 	return out
@@ -147,7 +151,7 @@ func appendLinkAttrs(out []byte, dest *string, ref string) []byte {
 	return out
 }
 
-func appendPos(out []byte, p SourcePos) []byte {
+func appendPos(out []byte, p ast.SourcePos) []byte {
 	out = strconv.AppendInt(out, int64(p.Line), 10)
 	out = append(out, ':')
 	out = strconv.AppendInt(out, int64(p.Col), 10)

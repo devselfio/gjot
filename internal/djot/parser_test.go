@@ -1,14 +1,16 @@
-package gjot
+package djot
 
 import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 func htmlOf(t *testing.T, src string) string {
 	t.Helper()
-	out, err := HTML(Parse([]byte(src)))
+	out, err := HTML(parseDoc([]byte(src), false), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,7 @@ func TestSourcePositionsInsideNestedBlocks(t *testing.T) {
 		{"> - a\n>\n>   b\n", "para (3:5:12-4:0:13)\n"},
 	}
 	for _, tt := range tests {
-		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		got := string(ASTText(parseDoc([]byte(tt.src), true)))
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
 		}
@@ -65,7 +67,7 @@ func TestSourcePositionsInsideNestedBlocks(t *testing.T) {
 // stand, list tightness and laziness, and captions.
 func TestStackUnits(t *testing.T) {
 	t.Run("splitLines", func(t *testing.T) {
-		pos := func(line, col, off int) SourcePos { return SourcePos{Line: line, Col: col, Offset: off} }
+		pos := func(line, col, off int) ast.SourcePos { return ast.SourcePos{Line: line, Col: col, Offset: off} }
 		cases := []struct {
 			name  string
 			input string
@@ -142,7 +144,7 @@ func TestStackUnits(t *testing.T) {
 	}
 	for _, c := range html {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := HTML(Parse([]byte(c.input)))
+			got, err := HTML(parseDoc([]byte(c.input), false), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,7 +157,7 @@ func TestStackUnits(t *testing.T) {
 	// Each case is an input and its expected AST text: verbatim from a
 	// corpus "ap" case, or, where noted, the tree a corpus case's HTML
 	// implies.
-	ast := []struct {
+	cases := []struct {
 		name, from, input, want string
 		pos                     bool
 	}{
@@ -220,13 +222,9 @@ func TestStackUnits(t *testing.T) {
         str (1:2:1-1:2:1) text="a"
 `, true},
 	}
-	for _, c := range ast {
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var opts []ParseOption
-			if c.pos {
-				opts = append(opts, WithSourcePos())
-			}
-			got := string(ASTText(Parse([]byte(c.input), opts...)))
+			got := string(ASTText(parseDoc([]byte(c.input), c.pos)))
 			if got != c.want {
 				t.Errorf("%s\n---input---\n%s---want---\n%s---got---\n%s", c.from, c.input, c.want, got)
 			}
@@ -236,10 +234,10 @@ func TestStackUnits(t *testing.T) {
 
 // positionedBlocks are the block kinds that carry a position under
 // WithSourcePos (issue #16), at any depth.
-var positionedBlocks = []Node{
-	&BlockQuote{}, &Heading{}, &Section{}, &CodeBlock{}, &RawBlock{}, &Div{}, &ThematicBreak{},
-	&Table{}, &Row{}, &Cell{}, &Caption{}, &DefinitionList{}, &DefinitionListItem{},
-	&BulletList{}, &OrderedList{}, &TaskList{}, &ListItem{}, &TaskListItem{},
+var positionedBlocks = []ast.Node{
+	&ast.BlockQuote{}, &ast.Heading{}, &ast.Section{}, &ast.CodeBlock{}, &ast.RawBlock{}, &ast.Div{}, &ast.ThematicBreak{},
+	&ast.Table{}, &ast.Row{}, &ast.Cell{}, &ast.Caption{}, &ast.DefinitionList{}, &ast.DefinitionListItem{},
+	&ast.BulletList{}, &ast.OrderedList{}, &ast.TaskList{}, &ast.ListItem{}, &ast.TaskListItem{},
 }
 
 // TestEveryBlockNodeHasPosition parses one document holding each
@@ -268,9 +266,9 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 	// where records, per tag, whether it was seen at top level (outside any
 	// block quote or list item), inside a block quote and inside a list item.
 	type seen struct{ top, quote, item bool }
-	where := map[Tag]*seen{}
-	var walk func(n Node, inQuote, inItem bool)
-	walk = func(n Node, inQuote, inItem bool) {
+	where := map[ast.Tag]*seen{}
+	var walk func(n ast.Node, inQuote, inItem bool)
+	walk = func(n ast.Node, inQuote, inItem bool) {
 		s := where[n.Tag()]
 		if s == nil {
 			s = &seen{}
@@ -279,9 +277,9 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 		s.top = s.top || (!inQuote && !inItem)
 		s.quote = s.quote || inQuote
 		s.item = s.item || inItem
-		pos := n.header().Pos
+		pos := ast.HeaderOf(n).Pos
 		switch n.(type) {
-		case *Term, *Definition:
+		case *ast.Term, *ast.Definition:
 			if pos != nil {
 				t.Errorf("%s has a position %+v; zjot prints none", n.Tag(), *pos)
 			}
@@ -292,14 +290,14 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 				}
 			}
 		}
-		_, quote := n.(*BlockQuote)
-		_, item := n.(*ListItem)
-		for _, c := range childrenOf(n) {
+		_, quote := n.(*ast.BlockQuote)
+		_, item := n.(*ast.ListItem)
+		for _, c := range ast.Children(n) {
 			walk(c, inQuote || quote, inItem || item)
 		}
 	}
 	// The root is a section printed as doc, without a position.
-	for _, c := range childrenOf(Parse([]byte(input), WithSourcePos())) {
+	for _, c := range ast.Children(parseDoc([]byte(input), true)) {
 		walk(c, false, false)
 	}
 	for _, kind := range positionedBlocks {
@@ -314,17 +312,17 @@ func TestEveryBlockNodeHasPosition(t *testing.T) {
 			t.Errorf("%s occurs top=%v, in a quote=%v, in an item=%v; want all three", tag, s.top, s.quote, s.item)
 		}
 	}
-	for _, tag := range []Tag{"term", "definition"} {
+	for _, tag := range []ast.Tag{"term", "definition"} {
 		if where[tag] == nil {
 			t.Errorf("%s does not occur in the document", tag)
 		}
 	}
 
-	Walk(Parse([]byte(input)), func(n Node) WalkStatus {
-		if pos := n.header().Pos; pos != nil {
+	ast.Walk(parseDoc([]byte(input), false), func(n ast.Node) ast.WalkStatus {
+		if pos := ast.HeaderOf(n).Pos; pos != nil {
 			t.Errorf("without WithSourcePos, %s has a position %+v", n.Tag(), *pos)
 		}
-		return WalkContinue
+		return ast.WalkContinue
 	})
 }
 
@@ -407,7 +405,7 @@ func TestBlockEnds(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := string(ASTText(Parse([]byte(c.input), WithSourcePos())))
+			got := string(ASTText(parseDoc([]byte(c.input), true)))
 			if got != c.want {
 				t.Errorf("%s\n---input---\n%s---want---\n%s---got---\n%s", c.from, c.input, c.want, got)
 			}
@@ -487,8 +485,8 @@ func TestOrderedListNode(t *testing.T) {
 		{"IV. x\n", "I.", "IV"},
 	}
 	for _, c := range cases {
-		first := Parse([]byte(c.input)).(*Section).Children[0]
-		list, ok := first.(*OrderedList)
+		first := parseDoc([]byte(c.input), false).(*ast.Section).Children[0]
+		list, ok := first.(*ast.OrderedList)
 		if !ok || list.Style != c.style || list.Marker != c.text || len(list.Attrs) != 0 {
 			t.Errorf("%q: got %s %+v; want ordered_list style=%q marker=%q, no attrs",
 				c.input, first.Tag(), first, c.style, c.text)
@@ -496,7 +494,7 @@ func TestOrderedListNode(t *testing.T) {
 	}
 	want := "doc\n  ordered_list tight=true style=\"(a)\"\n    list_item\n      para\n        str text=\"x\"\n" +
 		"  ordered_list tight=true style=\"1)\"\n    list_item\n      para\n        str text=\"z\"\n"
-	if got := string(ASTText(Parse([]byte("(a) x\n\n5) z\n")))); got != want {
+	if got := string(ASTText(parseDoc([]byte("(a) x\n\n5) z\n"), false))); got != want {
 		t.Errorf("AST text:\n---got---\n%s---want---\n%s", got, want)
 	}
 }
@@ -506,14 +504,14 @@ func TestOrderedListNode(t *testing.T) {
 // defined again keeps its place with its new content; a reference keeps its
 // normalized label, numbered only when rendered (grid.test L1311, L1628).
 func TestFootnoteDefinitionsInTree(t *testing.T) {
-	doc := Parse([]byte("use[^a  b]\n\n[^x]: one\n\n[^y]: two\n\n[^x]: three\n"))
+	doc := parseDoc([]byte("use[^a  b]\n\n[^x]: one\n\n[^y]: two\n\n[^x]: three\n"), false)
 	var got []string
-	for _, b := range childrenOf(doc) {
+	for _, b := range ast.Children(doc) {
 		switch b := b.(type) {
-		case *Footnote:
-			got = append(got, "footnote "+b.Label+"="+b.Children[0].(*Para).Children[0].(*Str).Text)
-		case *Para:
-			got = append(got, "para ref="+b.Children[1].(*FootnoteReference).Label)
+		case *ast.Footnote:
+			got = append(got, "footnote "+b.Label+"="+b.Children[0].(*ast.Para).Children[0].(*ast.Str).Text)
+		case *ast.Para:
+			got = append(got, "para ref="+b.Children[1].(*ast.FootnoteReference).Label)
 		default:
 			got = append(got, string(b.Tag()))
 		}
@@ -522,4 +520,11 @@ func TestFootnoteDefinitionsInTree(t *testing.T) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("blocks = %v, want %v", got, want)
 	}
+}
+
+// parseDoc is Parse without its tooDeep flag, which the nesting tests at
+// the root check through gjot.ParseErr.
+func parseDoc(src []byte, sourcePos bool) ast.Node {
+	doc, _ := Parse(string(src), sourcePos)
+	return doc
 }

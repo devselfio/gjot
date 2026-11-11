@@ -1,6 +1,10 @@
-package gjot
+package djot
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/devselfio/gjot/ast"
+)
 
 // blockAttrs is a parsed attribute set `{#id .class key="value" %comment%}`.
 // attrs holds every attribute as djot.js's attribute object holds them: a
@@ -10,11 +14,11 @@ import "strings"
 // attribute and names nothing, as djot.js tests the id's truthiness.
 type blockAttrs struct {
 	id    string
-	attrs []Attr
+	attrs []ast.Attr
 }
 
 // attrsOf is attrs as the block attributes they are, the id read off them.
-func attrsOf(attrs []Attr) blockAttrs {
+func attrsOf(attrs []ast.Attr) blockAttrs {
 	return blockAttrs{id: valueOf(attrs, "id"), attrs: attrs}
 }
 
@@ -39,7 +43,7 @@ func (b blockAttrs) merge(other blockAttrs) blockAttrs {
 // key's first position and gives it the last value; with join, the value
 // goes after the one there with a space (a `.class`, and a class merged from
 // a later attribute), unless there is none yet.
-type attrObject []Attr
+type attrObject []ast.Attr
 
 func (o *attrObject) set(key, value string, join bool) {
 	for i := range *o {
@@ -53,7 +57,7 @@ func (o *attrObject) set(key, value string, join bool) {
 		}
 		return
 	}
-	*o = append(*o, Attr{key, value})
+	*o = append(*o, ast.Attr{Key: key, Value: value})
 }
 
 // writesID reports whether an id was written, `#x` or `id=`, empty included:
@@ -61,7 +65,7 @@ func (o *attrObject) set(key, value string, join bool) {
 // the same.
 func (b blockAttrs) writesID() bool { return hasKey(b.attrs, "id") }
 
-func hasKey(attrs []Attr, key string) bool {
+func hasKey(attrs []ast.Attr, key string) bool {
 	for _, a := range attrs {
 		if a.Key == key {
 			return true
@@ -71,7 +75,7 @@ func hasKey(attrs []Attr, key string) bool {
 }
 
 // valueOf is the value of the key among attrs, or "" when absent.
-func valueOf(attrs []Attr, key string) string {
+func valueOf(attrs []ast.Attr, key string) string {
 	for _, a := range attrs {
 		if a.Key == key {
 			return a.Value

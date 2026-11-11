@@ -3,6 +3,8 @@ package gjot
 import (
 	"strings"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // roundTrip re-parses the written Djot and returns its HTML.
@@ -357,14 +359,14 @@ func TestWriterTextEscapes(t *testing.T) {
 func TestWriterEscapesMarkupInText(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		para []Node
+		para []ast.Node
 	}{
-		{"markup-in-text", []Node{&Str{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
-		{"own-closer-inside-insert", []Node{&Insert{Children: []Node{&Str{Text: "a +} b"}}}}},
-		{"own-closer-inside-braced-emph", []Node{&Emph{Children: []Node{&Str{Text: " a _} b"}}}}},
+		{"markup-in-text", []ast.Node{&ast.Str{Text: "a `b` \"c\" 'd' |e| $`f` <http://g> h{.i} {\"j k}} _l_ *m* [n](o) p\\ q\\"}}},
+		{"own-closer-inside-insert", []ast.Node{&ast.Insert{Children: []ast.Node{&ast.Str{Text: "a +} b"}}}}},
+		{"own-closer-inside-braced-emph", []ast.Node{&ast.Emph{Children: []ast.Node{&ast.Str{Text: " a _} b"}}}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			doc := &Section{Children: []Node{&Para{Children: c.para}}}
+			doc := &ast.Section{Children: []ast.Node{&ast.Para{Children: c.para}}}
 			djot := Djot(doc)
 			got, err := HTML(Parse(djot))
 			if err != nil {
@@ -522,9 +524,9 @@ func TestWriterRegistersIDs(t *testing.T) {
 // (a tree built by hand: the id a later heading of the same text would get)
 // is written with the id explicit, so its HTML stands.
 func TestWriterExplicitIDFallback(t *testing.T) {
-	doc := &Section{Children: []Node{
-		&Section{Header: Header{ID: "a-1"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
-		&Section{Header: Header{ID: "a"}, Level: 1, AutoID: true, Children: []Node{&Heading{Level: 1, Children: []Node{&Str{Text: "a"}}}}},
+	doc := &ast.Section{Children: []ast.Node{
+		&ast.Section{Header: ast.Header{ID: "a-1"}, Level: 1, AutoID: true, Children: []ast.Node{&ast.Heading{Level: 1, Children: []ast.Node{&ast.Str{Text: "a"}}}}},
+		&ast.Section{Header: ast.Header{ID: "a"}, Level: 1, AutoID: true, Children: []ast.Node{&ast.Heading{Level: 1, Children: []ast.Node{&ast.Str{Text: "a"}}}}},
 	}}
 	djot := string(Djot(doc))
 	want := "# {#a}a\n\n{#a}\n# a\n"
@@ -568,4 +570,14 @@ func TestWriterRoundTripWithSourcePos(t *testing.T) {
 				i, src, positioned, want, got)
 		}
 	}
+}
+
+// htmlOf is src's HTML through the public Parse and HTML.
+func htmlOf(t *testing.T, src string) string {
+	t.Helper()
+	out, err := HTML(Parse([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

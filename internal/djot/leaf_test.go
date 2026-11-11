@@ -1,8 +1,10 @@
-package gjot
+package djot
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // The leaf functions are the stack parser's view of one line, ported from
@@ -115,9 +117,9 @@ func TestLeafCarriageReturn(t *testing.T) {
 		t.Errorf("closesDiv(%q, 3) = false, want true", ":::\r")
 	}
 	for _, src := range []string{"#\rx", ">\rx"} {
-		doc := Parse([]byte(src))
-		var tags []Tag
-		for _, c := range childrenOf(doc) {
+		doc := parseDoc([]byte(src), false)
+		var tags []ast.Tag
+		for _, c := range ast.Children(doc) {
 			tags = append(tags, c.Tag())
 		}
 		if len(tags) != 1 || tags[0] != "para" {
@@ -355,7 +357,7 @@ func TestLeafIsTableSep(t *testing.T) {
 
 func TestLeafParseSepAligns(t *testing.T) {
 	got := parseSepAligns("| --- | :-- | --: | :-: |")
-	want := []CellAlign{AlignDefault, AlignLeft, AlignRight, AlignCenter}
+	want := []ast.CellAlign{ast.AlignDefault, ast.AlignLeft, ast.AlignRight, ast.AlignCenter}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parseSepAligns = %v, want %v", got, want)
 	}

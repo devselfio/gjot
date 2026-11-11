@@ -1,8 +1,10 @@
-package gjot
+package djot
 
 import (
 	"reflect"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 func TestParseAttrs(t *testing.T) {
@@ -17,37 +19,37 @@ func TestParseAttrs(t *testing.T) {
 		// classes, a `class=` key starts them over, and an empty `#` or `.`
 		// names nothing (zjot.test L9844, L10252, L10264, L7000).
 		{"id classes key comment", `{#id .a .b key="v" %c%}`,
-			blockAttrs{id: "id", attrs: []Attr{{"id", "id"}, {"class", "a b"}, {"key", "v"}}}, true},
+			blockAttrs{id: "id", attrs: []ast.Attr{{Key: "id", Value: "id"}, {Key: "class", Value: "a b"}, {Key: "key", Value: "v"}}}, true},
 		{"id key over hash, in the first place", `{#y id=x}`,
-			blockAttrs{id: "x", attrs: []Attr{{"id", "x"}}}, true},
-		{"two hashes", `{#a #b}`, blockAttrs{id: "b", attrs: []Attr{{"id", "b"}}}, true},
+			blockAttrs{id: "x", attrs: []ast.Attr{{Key: "id", Value: "x"}}}, true},
+		{"two hashes", `{#a #b}`, blockAttrs{id: "b", attrs: []ast.Attr{{Key: "id", Value: "b"}}}, true},
 		{"id keeps its place among keys", `{#i k=v #j .c}`,
-			blockAttrs{id: "j", attrs: []Attr{{"id", "j"}, {"k", "v"}, {"class", "c"}}}, true},
+			blockAttrs{id: "j", attrs: []ast.Attr{{Key: "id", Value: "j"}, {Key: "k", Value: "v"}, {Key: "class", Value: "c"}}}, true},
 		{"repeated key takes the last value", `{k=a k=b}`,
-			blockAttrs{attrs: []Attr{{"k", "b"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "k", Value: "b"}}}, true},
 		{"class key starts over", `{.a class="b c"}`,
-			blockAttrs{attrs: []Attr{{"class", "b c"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "class", Value: "b c"}}}, true},
 		{"class key then dot joins", `{.a class=b .c}`,
-			blockAttrs{attrs: []Attr{{"class", "b c"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "class", Value: "b c"}}}, true},
 		{"empty hash names nothing", `{#}`, blockAttrs{}, true},
-		{"empty dot names nothing", `{.a .}`, blockAttrs{attrs: []Attr{{"class", "a"}}}, true},
+		{"empty dot names nothing", `{.a .}`, blockAttrs{attrs: []ast.Attr{{Key: "class", Value: "a"}}}, true},
 		{"empty id key is an attribute and no id", `{id=""}`,
-			blockAttrs{attrs: []Attr{{"id", ""}}}, true},
-		{"bare value", `{k=v}`, blockAttrs{attrs: []Attr{{"k", "v"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "id", Value: ""}}}, true},
+		{"bare value", `{k=v}`, blockAttrs{attrs: []ast.Attr{{Key: "k", Value: "v"}}}, true},
 		{"quoted value with escape and newline", "{key=\"bar\na\\$bim\"}",
-			blockAttrs{attrs: []Attr{{"key", "bar a$bim"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "key", Value: "bar a$bim"}}}, true},
 		// A backslash goes before djot.js's set of punctuation and stays
 		// before "<", "@" and a space; runs of spaces and line ends, an
 		// escaped line end included, are one space (zjot.test L9333, L9420).
 		{"quoted value escapes", `{k="x\,y\<z\@w\ v\\u\"q"}`,
-			blockAttrs{attrs: []Attr{{"k", `x,y\<z\@w\ v\u"q`}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "k", Value: `x,y\<z\@w\ v\u"q`}}}, true},
 		{"quoted value blanks collapse", "{k=\"x\\\ny  z \n w\"}",
-			blockAttrs{attrs: []Attr{{"k", "x\\ y z w"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "k", Value: "x\\ y z w"}}}, true},
 		{"comment only", `{%c%}`, blockAttrs{}, true},
 		{"incomplete", `{#id`, blockAttrs{}, false},
 		{"bad character", `{#id !}`, blockAttrs{}, false},
 		{"class placeholder keeps first class position", `{a=1 .x b=2 .y}`,
-			blockAttrs{attrs: []Attr{{"a", "1"}, {"class", "x y"}, {"b", "2"}}}, true},
+			blockAttrs{attrs: []ast.Attr{{Key: "a", Value: "1"}, {Key: "class", Value: "x y"}, {Key: "b", Value: "2"}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,7 +72,7 @@ func TestParseInlineAttrsEnd(t *testing.T) {
 	if !ok || end != 5 {
 		t.Fatalf("ok=%v end=%d, want true 5", ok, end)
 	}
-	if want := []Attr{{"class", "c"}}; !reflect.DeepEqual(ba.attrs, want) {
+	if want := []ast.Attr{{Key: "class", Value: "c"}}; !reflect.DeepEqual(ba.attrs, want) {
 		t.Errorf("attrs = %+v, want %+v", ba.attrs, want)
 	}
 	if _, _, ok := parseInlineAttrs("x{.c y", 1); ok {
@@ -87,17 +89,17 @@ func TestBlockAttrsMerge(t *testing.T) {
 		want                blockAttrs
 	}{
 		{"id class keys", `{#one .a k=1}`, `{#two .b k=2 j=3}`,
-			blockAttrs{id: "two", attrs: []Attr{{"id", "two"}, {"class", "a b"}, {"k", "2"}, {"j", "3"}}}},
+			blockAttrs{id: "two", attrs: []ast.Attr{{Key: "id", Value: "two"}, {Key: "class", Value: "a b"}, {Key: "k", Value: "2"}, {Key: "j", Value: "3"}}}},
 		{"earlier id kept", `{#one}`, `{j=3}`,
-			blockAttrs{id: "one", attrs: []Attr{{"id", "one"}, {"j", "3"}}}},
+			blockAttrs{id: "one", attrs: []ast.Attr{{Key: "id", Value: "one"}, {Key: "j", Value: "3"}}}},
 		{"class then id", `{.x}`, `{#i}`,
-			blockAttrs{id: "i", attrs: []Attr{{"class", "x"}, {"id", "i"}}}},
+			blockAttrs{id: "i", attrs: []ast.Attr{{Key: "class", Value: "x"}, {Key: "id", Value: "i"}}}},
 		{"key then keys", `{k=1}`, `{j=2 k=3}`,
-			blockAttrs{attrs: []Attr{{"k", "3"}, {"j", "2"}}}},
+			blockAttrs{attrs: []ast.Attr{{Key: "k", Value: "3"}, {Key: "j", Value: "2"}}}},
 		{"class key joins a later block attribute", `{.a}`, `{class=b}`,
-			blockAttrs{attrs: []Attr{{"class", "a b"}}}},
+			blockAttrs{attrs: []ast.Attr{{Key: "class", Value: "a b"}}}},
 		{"empty id key overrides", `{#x}`, `{id=""}`,
-			blockAttrs{attrs: []Attr{{"id", ""}}}},
+			blockAttrs{attrs: []ast.Attr{{Key: "id", Value: ""}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,7 +146,7 @@ func TestBlockAttrLineThroughParse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := HTML(Parse([]byte(tt.input)))
+			got, err := HTML(parseDoc([]byte(tt.input), false), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

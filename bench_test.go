@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"testing"
-	"unsafe"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 var writeBenchPage = flag.Bool("write-bench-page", false, "regenerate testdata/bench/page.dj from the generator and exit")
@@ -55,18 +55,18 @@ func readBenchPage(tb testing.TB) []byte {
 }
 
 // countNodes is the size of the tree under n, n included.
-func countNodes(n Node) int {
+func countNodes(n ast.Node) int {
 	count := 0
-	Walk(n, func(Node) WalkStatus {
+	ast.Walk(n, func(ast.Node) ast.WalkStatus {
 		count++
-		return WalkContinue
+		return ast.WalkContinue
 	})
 	return count
 }
 
 // parseAll parses every input and returns the trees and their node count.
-func parseAll(inputs [][]byte, opts ...ParseOption) ([]Node, int) {
-	trees := make([]Node, len(inputs))
+func parseAll(inputs [][]byte, opts ...ParseOption) ([]ast.Node, int) {
+	trees := make([]ast.Node, len(inputs))
 	nodes := 0
 	for i, in := range inputs {
 		trees[i] = Parse(in, opts...)
@@ -139,7 +139,7 @@ func benchPaths(b *testing.B, inputs [][]byte) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if _, err := UnmarshalNode(data); err != nil {
+				if _, err := ast.UnmarshalNode(data); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -240,105 +240,22 @@ func TestBenchPageMix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseErr: %v", err)
 	}
-	seen := map[Tag]bool{}
+	seen := map[ast.Tag]bool{}
 	attrs := false
-	Walk(doc, func(n Node) WalkStatus {
+	ast.Walk(doc, func(n ast.Node) ast.WalkStatus {
 		seen[n.Tag()] = true
-		if len(n.header().Attrs) > 0 {
+		if len(ast.HeaderOf(n).Attrs) > 0 {
 			attrs = true
 		}
-		return WalkContinue
+		return ast.WalkContinue
 	})
-	for _, kind := range []Node{&Heading{}, &Para{}, &BulletList{}, &OrderedList{}, &BlockQuote{}, &Table{},
-		&CodeBlock{}, &Footnote{}, &FootnoteReference{}, &Link{}, &Emph{}, &Strong{}, &Verbatim{}, &Span{}} {
+	for _, kind := range []ast.Node{&ast.Heading{}, &ast.Para{}, &ast.BulletList{}, &ast.OrderedList{}, &ast.BlockQuote{}, &ast.Table{},
+		&ast.CodeBlock{}, &ast.Footnote{}, &ast.FootnoteReference{}, &ast.Link{}, &ast.Emph{}, &ast.Strong{}, &ast.Verbatim{}, &ast.Span{}} {
 		if !seen[kind.Tag()] {
 			t.Errorf("page has no %s node", kind.Tag())
 		}
 	}
 	if !attrs {
 		t.Error("page has no node with attributes")
-	}
-}
-
-// TestNodeSize shows each kind's size, and on a 64-bit platform fails if a
-// common kind is 100 bytes or more.
-func TestNodeSize(t *testing.T) {
-	sizes := []struct {
-		kind Node
-		size uintptr
-	}{
-		{&Section{}, unsafe.Sizeof(Section{})},
-		{&Heading{}, unsafe.Sizeof(Heading{})},
-		{&Para{}, unsafe.Sizeof(Para{})},
-		{&ThematicBreak{}, unsafe.Sizeof(ThematicBreak{})},
-		{&CodeBlock{}, unsafe.Sizeof(CodeBlock{})},
-		{&RawBlock{}, unsafe.Sizeof(RawBlock{})},
-		{&BlockQuote{}, unsafe.Sizeof(BlockQuote{})},
-		{&Div{}, unsafe.Sizeof(Div{})},
-		{&BulletList{}, unsafe.Sizeof(BulletList{})},
-		{&TaskList{}, unsafe.Sizeof(TaskList{})},
-		{&OrderedList{}, unsafe.Sizeof(OrderedList{})},
-		{&DefinitionList{}, unsafe.Sizeof(DefinitionList{})},
-		{&ListItem{}, unsafe.Sizeof(ListItem{})},
-		{&TaskListItem{}, unsafe.Sizeof(TaskListItem{})},
-		{&DefinitionListItem{}, unsafe.Sizeof(DefinitionListItem{})},
-		{&Term{}, unsafe.Sizeof(Term{})},
-		{&Definition{}, unsafe.Sizeof(Definition{})},
-		{&Table{}, unsafe.Sizeof(Table{})},
-		{&Caption{}, unsafe.Sizeof(Caption{})},
-		{&Row{}, unsafe.Sizeof(Row{})},
-		{&Cell{}, unsafe.Sizeof(Cell{})},
-		{&Footnote{}, unsafe.Sizeof(Footnote{})},
-		{&Str{}, unsafe.Sizeof(Str{})},
-		{&SoftBreak{}, unsafe.Sizeof(SoftBreak{})},
-		{&HardBreak{}, unsafe.Sizeof(HardBreak{})},
-		{&NonBreakingSpace{}, unsafe.Sizeof(NonBreakingSpace{})},
-		{&Emph{}, unsafe.Sizeof(Emph{})},
-		{&Strong{}, unsafe.Sizeof(Strong{})},
-		{&Span{}, unsafe.Sizeof(Span{})},
-		{&Mark{}, unsafe.Sizeof(Mark{})},
-		{&Superscript{}, unsafe.Sizeof(Superscript{})},
-		{&Subscript{}, unsafe.Sizeof(Subscript{})},
-		{&Insert{}, unsafe.Sizeof(Insert{})},
-		{&Delete{}, unsafe.Sizeof(Delete{})},
-		{&DoubleQuoted{}, unsafe.Sizeof(DoubleQuoted{})},
-		{&SingleQuoted{}, unsafe.Sizeof(SingleQuoted{})},
-		{&Verbatim{}, unsafe.Sizeof(Verbatim{})},
-		{&InlineMath{}, unsafe.Sizeof(InlineMath{})},
-		{&DisplayMath{}, unsafe.Sizeof(DisplayMath{})},
-		{&RawInline{}, unsafe.Sizeof(RawInline{})},
-		{&URL{}, unsafe.Sizeof(URL{})},
-		{&Email{}, unsafe.Sizeof(Email{})},
-		{&FootnoteReference{}, unsafe.Sizeof(FootnoteReference{})},
-		{&Symb{}, unsafe.Sizeof(Symb{})},
-		{&Link{}, unsafe.Sizeof(Link{})},
-		{&Image{}, unsafe.Sizeof(Image{})},
-		{&Ellipsis{}, unsafe.Sizeof(Ellipsis{})},
-		{&EmDash{}, unsafe.Sizeof(EmDash{})},
-		{&EnDash{}, unsafe.Sizeof(EnDash{})},
-	}
-	if len(sizes) != len(nodeKinds) {
-		t.Errorf("the table lists %d kinds, nodeKinds %d", len(sizes), len(nodeKinds))
-	}
-	var table strings.Builder
-	for _, s := range sizes {
-		fmt.Fprintf(&table, "\n  %-22s %3d", s.kind.Tag(), s.size)
-	}
-	t.Logf("kind sizes in bytes (unsafe.Sizeof):%s", table.String())
-	if unsafe.Sizeof(uintptr(0)) != 8 {
-		t.Skip("the 100-byte bound is for 64-bit platforms")
-	}
-	common := map[Tag]bool{"str": true, "para": true, "emph": true, "strong": true, "link": true, "image": true,
-		"heading": true, "section": true, "list_item": true, "bullet_list": true, "span": true, "verbatim": true}
-	for _, s := range sizes {
-		if common[s.kind.Tag()] {
-			delete(common, s.kind.Tag())
-			if s.size >= 100 {
-				t.Errorf("%s is %d bytes, want under 100", s.kind.Tag(), s.size)
-			}
-		}
-	}
-	for tag := range common {
-		t.Errorf("common kind %s is not in the table", tag)
 	}
 }

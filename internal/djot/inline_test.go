@@ -1,9 +1,12 @@
-package gjot
+package djot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/devselfio/gjot/ast"
 )
 
 // Inline nodes the corpus does not pin still carry the range of the source
@@ -46,7 +49,7 @@ func TestInlinePositions(t *testing.T) {
 		{"x $`a  \n", "inline_math (1:3:2-1:5:4)\n"},
 	}
 	for _, tt := range tests {
-		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		got := string(ASTText(parseDoc([]byte(tt.src), true)))
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
 		}
@@ -57,16 +60,16 @@ func TestInlinePositions(t *testing.T) {
 func TestEveryInlineNodeHasPosition(t *testing.T) {
 	src := "a _b_ *c* [l](u) ![i](u) [s]{.x} `v` x\\\ny\\ z {=m=} {+i+} {-d-} " +
 		"H~2~O x^2^ \"q\" {'s'} $`m` $$`n` :smile: <http://x> <a@b> a[^n] -- --- ... w{.c} *u ]{.c} {\"q <y ![i] { a\\\n"
-	doc := Parse([]byte(src), WithSourcePos())
-	para, ok := childrenOf(doc)[0].(*Para)
+	doc := parseDoc([]byte(src), true)
+	para, ok := ast.Children(doc)[0].(*ast.Para)
 	if !ok {
-		t.Fatalf("got %s, want para", childrenOf(doc)[0].Tag())
+		t.Fatalf("got %s, want para", ast.Children(doc)[0].Tag())
 	}
-	Walk(para, func(n Node) WalkStatus {
-		if n != Node(para) && n.header().Pos == nil {
-			t.Errorf("%s %q has no position", n.Tag(), inlineText([]Node{n}))
+	ast.Walk(para, func(n ast.Node) ast.WalkStatus {
+		if n != ast.Node(para) && ast.HeaderOf(n).Pos == nil {
+			t.Errorf("%s %q has no position", n.Tag(), inlineText([]ast.Node{n}))
 		}
-		return WalkContinue
+		return ast.WalkContinue
 	})
 }
 
@@ -74,21 +77,21 @@ func TestEveryInlineNodeHasPosition(t *testing.T) {
 // the newline's own offset.
 func TestLineMapResolveJoiningNewline(t *testing.T) {
 	m := lineMap{segments: []lineSegment{
-		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 5}},
-		{joinedStart: 4, orig: SourcePos{Line: 2, Col: 3, Offset: 8}, eol: SourcePos{Line: 3, Col: 0, Offset: 10}},
+		{joinedStart: 0, orig: ast.SourcePos{Line: 1, Col: 3, Offset: 2}, eol: ast.SourcePos{Line: 2, Col: 0, Offset: 5}},
+		{joinedStart: 4, orig: ast.SourcePos{Line: 2, Col: 3, Offset: 8}, eol: ast.SourcePos{Line: 3, Col: 0, Offset: 10}},
 	}, total: 6}
 	tests := []struct {
 		off  int
-		want SourcePos
+		want ast.SourcePos
 	}{
-		{0, SourcePos{Line: 1, Col: 3, Offset: 2}},
-		{2, SourcePos{Line: 1, Col: 5, Offset: 4}},
-		{3, SourcePos{Line: 2, Col: 0, Offset: 5}},
-		{4, SourcePos{Line: 2, Col: 3, Offset: 8}},
-		{5, SourcePos{Line: 2, Col: 4, Offset: 9}},
+		{0, ast.SourcePos{Line: 1, Col: 3, Offset: 2}},
+		{2, ast.SourcePos{Line: 1, Col: 5, Offset: 4}},
+		{3, ast.SourcePos{Line: 2, Col: 0, Offset: 5}},
+		{4, ast.SourcePos{Line: 2, Col: 3, Offset: 8}},
+		{5, ast.SourcePos{Line: 2, Col: 4, Offset: 9}},
 		// One past the joined text: the last line's newline, where a hard
 		// break ending the leaf stands.
-		{6, SourcePos{Line: 3, Col: 0, Offset: 10}},
+		{6, ast.SourcePos{Line: 3, Col: 0, Offset: 10}},
 	}
 	for _, tt := range tests {
 		if got := m.resolve(tt.off); got != tt.want {
@@ -98,7 +101,7 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	if r := m.rangeOf(3, 3); r != nil {
 		t.Errorf("rangeOf(3, 3) = %+v, want nil", r)
 	}
-	want := Range{Start: SourcePos{Line: 1, Col: 4, Offset: 3}, End: SourcePos{Line: 2, Col: 0, Offset: 5}}
+	want := ast.Range{Start: ast.SourcePos{Line: 1, Col: 4, Offset: 3}, End: ast.SourcePos{Line: 2, Col: 0, Offset: 5}}
 	if r := m.rangeOf(1, 4); r == nil || *r != want {
 		t.Errorf("rangeOf(1, 4) = %+v, want %+v", r, want)
 	}
@@ -106,10 +109,10 @@ func TestLineMapResolveJoiningNewline(t *testing.T) {
 	// Segments on lines 1 and 3, line 2 skipped (zjot.test L9563, "# a",
 	// "#", "# b"): the joining newline is line 1's own, not line 3's.
 	skipped := lineMap{segments: []lineSegment{
-		{joinedStart: 0, orig: SourcePos{Line: 1, Col: 3, Offset: 2}, eol: SourcePos{Line: 2, Col: 0, Offset: 3}},
-		{joinedStart: 2, orig: SourcePos{Line: 3, Col: 3, Offset: 8}, eol: SourcePos{Line: 4, Col: 0, Offset: 9}},
+		{joinedStart: 0, orig: ast.SourcePos{Line: 1, Col: 3, Offset: 2}, eol: ast.SourcePos{Line: 2, Col: 0, Offset: 3}},
+		{joinedStart: 2, orig: ast.SourcePos{Line: 3, Col: 3, Offset: 8}, eol: ast.SourcePos{Line: 4, Col: 0, Offset: 9}},
 	}, total: 3}
-	if got, want := skipped.resolve(1), (SourcePos{Line: 2, Col: 0, Offset: 3}); got != want {
+	if got, want := skipped.resolve(1), (ast.SourcePos{Line: 2, Col: 0, Offset: 3}); got != want {
 		t.Errorf("skipped line: resolve(1) = %+v, want %+v", got, want)
 	}
 }
@@ -161,17 +164,17 @@ const (
 // inlineText spells inline nodes out for comparison: text as is, a hard
 // break as hardBreak, a non-breaking space as nbsp, a verbatim in
 // backticks, any other kind as its tag in angle brackets.
-func inlineText(nodes []Node) string {
+func inlineText(nodes []ast.Node) string {
 	var b strings.Builder
 	for _, n := range nodes {
 		switch n := n.(type) {
-		case *HardBreak:
+		case *ast.HardBreak:
 			b.WriteString(hardBreak)
-		case *NonBreakingSpace:
+		case *ast.NonBreakingSpace:
 			b.WriteString(nbsp)
-		case *Verbatim:
+		case *ast.Verbatim:
 			b.WriteString("`" + n.Text + "`")
-		case *Str:
+		case *ast.Str:
 			b.WriteString(n.Text)
 		default:
 			b.WriteString("<" + string(n.Tag()) + ">")
@@ -264,7 +267,7 @@ func TestInlineUnmatchedMarkupIsText(t *testing.T) {
 		{"a\"\n", "str (1:1:0-1:1:0) text=\"a\"\n    str (1:2:1-1:2:1) text=\"\u201c\"\n"},
 	}
 	for _, tt := range tests {
-		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		got := string(ASTText(parseDoc([]byte(tt.src), true)))
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
 		}
@@ -334,7 +337,7 @@ func TestInlineBracketsCloseForward(t *testing.T) {
 		{"q[^a[b]c]\n", "<p>q<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a>c]</p>\n"},
 		{"q![^a](u)\n", "<p>q!<a id=\"fnref1\" href=\"#fn1\" role=\"doc-noteref\"><sup>1</sup></a>(u)</p>\n"},
 	} {
-		out, err := HTML(Parse([]byte(tt.src)))
+		out, err := HTML(parseDoc([]byte(tt.src), false), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -364,7 +367,7 @@ func TestInlineMathIsVerbatim(t *testing.T) {
 		{"$a $$b\n", "<p>$a $$b</p>\n"},
 	}
 	for _, tt := range tests {
-		got, err := HTML(Parse([]byte(tt.src)))
+		got, err := HTML(parseDoc([]byte(tt.src), false), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -388,7 +391,7 @@ func TestRawFormatGrammar(t *testing.T) {
 		{"`a`{=}\n", "verbatim (1:1:0-1:3:2) text=\"a\"\n    str (1:4:3-1:6:5) text=\"{=}\"\n"},
 	}
 	for _, tt := range tests {
-		got := string(ASTText(Parse([]byte(tt.src), WithSourcePos())))
+		got := string(ASTText(parseDoc([]byte(tt.src), true)))
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
 		}
@@ -413,13 +416,13 @@ func TestInlineAttributeAttachment(t *testing.T) {
 		{"\"{#i}a\n\n# i\n", "str text=\"“\" id=\"i\"\n    str text=\"a\"\n  section id=\"i-1\"\n"},
 	}
 	for _, tt := range tests {
-		got := string(ASTText(Parse([]byte(tt.src))))
+		got := string(ASTText(parseDoc([]byte(tt.src), false)))
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("%q\n got %q\nwant it to contain %q", tt.src, got, tt.want)
 		}
 	}
 	// The smart quote's attributes render nothing.
-	html, err := HTML(Parse([]byte("\"{#i .c}a\n")))
+	html, err := HTML(parseDoc([]byte("\"{#i .c}a\n"), false), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +444,7 @@ func TestInlineOpenerStackShape(t *testing.T) {
 		{"*[a](b*)\n", "<p>*<a href=\"b*\">a</a></p>\n"},
 	}
 	for _, tt := range tests {
-		got, err := HTML(Parse([]byte(tt.src)))
+		got, err := HTML(parseDoc([]byte(tt.src), false), nil)
 		if err != nil {
 			t.Fatalf("%q: %v", tt.src, err)
 		}
@@ -512,8 +515,88 @@ func BenchmarkInlineOpenerStack(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			src := []byte(strings.Repeat("{_", n) + strings.Repeat("x*", n))
 			for b.Loop() {
-				Parse(src)
+				parseDoc(src, false)
 			}
 		})
 	}
+}
+
+// sliceStateCases pin, for inputs that exercise the inline parser's text
+// offsets (adjacent slices, escapes, unmatched openers, smart quotes, a
+// word split off for attributes, trimming before hard breaks and at the
+// end), the AST text without and with positions and the positioned JSON.
+// The expectations are gjot's output at fb07082, when the offsets were the
+// unexported Str.off field.
+var sliceStateCases = []struct{ src, plain, pos, json string }{
+	{"ab cd\n",
+		"doc\n  para\n    str text=\"ab cd\"\n",
+		"doc\n  para (1:1:0-2:0:5)\n    str (1:1:0-1:5:4) text=\"ab cd\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"ab cd\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":5,\"offset\":4}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":5}}}]}"},
+	{"a\\*b\\_c\n",
+		"doc\n  para\n    str text=\"a\"\n    str text=\"*b\"\n    str text=\"_c\"\n",
+		"doc\n  para (1:1:0-2:0:7)\n    str (1:1:0-1:1:0) text=\"a\"\n    str (1:3:2-1:4:3) text=\"*b\"\n    str (1:6:5-1:7:6) text=\"_c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"a\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":1,\"offset\":0}}},{\"tag\":\"str\",\"text\":\"*b\",\"pos\":{\"start\":{\"line\":1,\"col\":3,\"offset\":2},\"end\":{\"line\":1,\"col\":4,\"offset\":3}}},{\"tag\":\"str\",\"text\":\"_c\",\"pos\":{\"start\":{\"line\":1,\"col\":6,\"offset\":5},\"end\":{\"line\":1,\"col\":7,\"offset\":6}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":7}}}]}"},
+	{"a [b c\n",
+		"doc\n  para\n    str text=\"a [b c\"\n",
+		"doc\n  para (1:1:0-2:0:6)\n    str (1:1:0-1:6:5) text=\"a [b c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"a [b c\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":6}}}]}"},
+	{"a _b *c\n",
+		"doc\n  para\n    str text=\"a _b *c\"\n",
+		"doc\n  para (1:1:0-2:0:7)\n    str (1:1:0-1:7:6) text=\"a _b *c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"a _b *c\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":7,\"offset\":6}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":7}}}]}"},
+	{"'a' \"b\" don't\n",
+		"doc\n  para\n    single_quoted\n      str text=\"a\"\n    str text=\" \"\n    double_quoted\n      str text=\"b\"\n    str text=\" don\"\n    str text=\"’\"\n    str text=\"t\"\n",
+		"doc\n  para (1:1:0-2:0:13)\n    single_quoted (1:1:0-1:3:2)\n      str (1:2:1-1:2:1) text=\"a\"\n    str (1:4:3-1:4:3) text=\" \"\n    double_quoted (1:5:4-1:7:6)\n      str (1:6:5-1:6:5) text=\"b\"\n    str (1:8:7-1:11:10) text=\" don\"\n    str (1:12:11-1:12:11) text=\"’\"\n    str (1:13:12-1:13:12) text=\"t\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"single_quoted\",\"children\":[{\"tag\":\"str\",\"text\":\"a\",\"pos\":{\"start\":{\"line\":1,\"col\":2,\"offset\":1},\"end\":{\"line\":1,\"col\":2,\"offset\":1}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":3,\"offset\":2}}},{\"tag\":\"str\",\"text\":\" \",\"pos\":{\"start\":{\"line\":1,\"col\":4,\"offset\":3},\"end\":{\"line\":1,\"col\":4,\"offset\":3}}},{\"tag\":\"double_quoted\",\"children\":[{\"tag\":\"str\",\"text\":\"b\",\"pos\":{\"start\":{\"line\":1,\"col\":6,\"offset\":5},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}}],\"pos\":{\"start\":{\"line\":1,\"col\":5,\"offset\":4},\"end\":{\"line\":1,\"col\":7,\"offset\":6}}},{\"tag\":\"str\",\"text\":\" don\",\"pos\":{\"start\":{\"line\":1,\"col\":8,\"offset\":7},\"end\":{\"line\":1,\"col\":11,\"offset\":10}}},{\"tag\":\"str\",\"text\":\"’\",\"source\":\"'\",\"pos\":{\"start\":{\"line\":1,\"col\":12,\"offset\":11},\"end\":{\"line\":1,\"col\":12,\"offset\":11}}},{\"tag\":\"str\",\"text\":\"t\",\"pos\":{\"start\":{\"line\":1,\"col\":13,\"offset\":12},\"end\":{\"line\":1,\"col\":13,\"offset\":12}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":13}}}]}"},
+	{"x word{.c} y\n",
+		"doc\n  para\n    str text=\"x \"\n    span class=\"c\"\n      str text=\"word\"\n    str text=\" y\"\n",
+		"doc\n  para (1:1:0-2:0:12)\n    str (1:1:0-1:2:1) text=\"x \"\n    span (1:3:2-1:6:5) class=\"c\"\n      str (1:3:2-1:6:5) text=\"word\"\n    str (1:11:10-1:12:11) text=\" y\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"x \",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":2,\"offset\":1}}},{\"tag\":\"span\",\"children\":[{\"tag\":\"str\",\"text\":\"word\",\"pos\":{\"start\":{\"line\":1,\"col\":3,\"offset\":2},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}}],\"attrs\":[{\"key\":\"class\",\"value\":\"c\"}],\"pos\":{\"start\":{\"line\":1,\"col\":3,\"offset\":2},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}},{\"tag\":\"str\",\"text\":\" y\",\"pos\":{\"start\":{\"line\":1,\"col\":11,\"offset\":10},\"end\":{\"line\":1,\"col\":12,\"offset\":11}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":12}}}]}"},
+	{"x it's{.c}\n",
+		"doc\n  para\n    str text=\"x it\"\n    str text=\"’\"\n    span class=\"c\"\n      str text=\"s\"\n",
+		"doc\n  para (1:1:0-2:0:10)\n    str (1:1:0-1:4:3) text=\"x it\"\n    str (1:5:4-1:5:4) text=\"’\"\n    span (1:6:5-1:6:5) class=\"c\"\n      str (1:6:5-1:6:5) text=\"s\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"x it\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":4,\"offset\":3}}},{\"tag\":\"str\",\"text\":\"’\",\"source\":\"'\",\"pos\":{\"start\":{\"line\":1,\"col\":5,\"offset\":4},\"end\":{\"line\":1,\"col\":5,\"offset\":4}}},{\"tag\":\"span\",\"children\":[{\"tag\":\"str\",\"text\":\"s\",\"pos\":{\"start\":{\"line\":1,\"col\":6,\"offset\":5},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}}],\"attrs\":[{\"key\":\"class\",\"value\":\"c\"}],\"pos\":{\"start\":{\"line\":1,\"col\":6,\"offset\":5},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":10}}}]}"},
+	{"a b  \\\nc\n",
+		"doc\n  para\n    str text=\"a b\"\n    hard_break\n    str text=\"c\"\n",
+		"doc\n  para (1:1:0-3:0:8)\n    str (1:1:0-1:3:2) text=\"a b\"\n    hard_break (2:0:6-2:0:6)\n    str (2:1:7-2:1:7) text=\"c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"a b\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":3,\"offset\":2}}},{\"tag\":\"hard_break\",\"pos\":{\"start\":{\"line\":2,\"col\":0,\"offset\":6},\"end\":{\"line\":2,\"col\":0,\"offset\":6}}},{\"tag\":\"str\",\"text\":\"c\",\"pos\":{\"start\":{\"line\":2,\"col\":1,\"offset\":7},\"end\":{\"line\":2,\"col\":1,\"offset\":7}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":3,\"col\":0,\"offset\":8}}}]}"},
+	{"a b   \nc  \n",
+		"doc\n  para\n    str text=\"a b   \"\n    soft_break\n    str text=\"c\"\n",
+		"doc\n  para (1:1:0-2:2:8)\n    str (1:1:0-1:6:5) text=\"a b   \"\n    soft_break (2:0:6-2:0:6)\n    str (2:1:7-2:1:7) text=\"c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"str\",\"text\":\"a b   \",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}},{\"tag\":\"soft_break\",\"pos\":{\"start\":{\"line\":2,\"col\":0,\"offset\":6},\"end\":{\"line\":2,\"col\":0,\"offset\":6}}},{\"tag\":\"str\",\"text\":\"c\",\"pos\":{\"start\":{\"line\":2,\"col\":1,\"offset\":7},\"end\":{\"line\":2,\"col\":1,\"offset\":7}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":2,\"offset\":8}}}]}"},
+	{"a{.c} *b*{#i} c\n",
+		"doc\n  para\n    span class=\"c\"\n      str text=\"a\"\n    str text=\" \"\n    strong id=\"i\"\n      str text=\"b\"\n    str text=\" c\"\n",
+		"doc\n  para (1:1:0-2:0:15)\n    span (1:1:0-1:1:0) class=\"c\"\n      str (1:1:0-1:1:0) text=\"a\"\n    str (1:6:5-1:6:5) text=\" \"\n    strong (1:7:6-1:9:8) id=\"i\"\n      str (1:8:7-1:8:7) text=\"b\"\n    str (1:14:13-1:15:14) text=\" c\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"span\",\"children\":[{\"tag\":\"str\",\"text\":\"a\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":1,\"offset\":0}}}],\"attrs\":[{\"key\":\"class\",\"value\":\"c\"}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":1,\"offset\":0}}},{\"tag\":\"str\",\"text\":\" \",\"pos\":{\"start\":{\"line\":1,\"col\":6,\"offset\":5},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}},{\"tag\":\"strong\",\"children\":[{\"tag\":\"str\",\"text\":\"b\",\"pos\":{\"start\":{\"line\":1,\"col\":8,\"offset\":7},\"end\":{\"line\":1,\"col\":8,\"offset\":7}}}],\"id\":\"i\",\"attrs\":[{\"key\":\"id\",\"value\":\"i\"}],\"pos\":{\"start\":{\"line\":1,\"col\":7,\"offset\":6},\"end\":{\"line\":1,\"col\":9,\"offset\":8}}},{\"tag\":\"str\",\"text\":\" c\",\"pos\":{\"start\":{\"line\":1,\"col\":14,\"offset\":13},\"end\":{\"line\":1,\"col\":15,\"offset\":14}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":15}}}]}"},
+	{"[a](b) c [d\n",
+		"doc\n  para\n    link destination=\"b\"\n      str text=\"a\"\n    str text=\" c [d\"\n",
+		"doc\n  para (1:1:0-2:0:11)\n    link (1:1:0-1:6:5) destination=\"b\"\n      str (1:2:1-1:2:1) text=\"a\"\n    str (1:7:6-1:11:10) text=\" c [d\"\n",
+		"{\"tag\":\"section\",\"children\":[{\"tag\":\"para\",\"children\":[{\"tag\":\"link\",\"children\":[{\"tag\":\"str\",\"text\":\"a\",\"pos\":{\"start\":{\"line\":1,\"col\":2,\"offset\":1},\"end\":{\"line\":1,\"col\":2,\"offset\":1}}}],\"destination\":\"b\",\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":1,\"col\":6,\"offset\":5}}},{\"tag\":\"str\",\"text\":\" c [d\",\"pos\":{\"start\":{\"line\":1,\"col\":7,\"offset\":6},\"end\":{\"line\":1,\"col\":11,\"offset\":10}}}],\"pos\":{\"start\":{\"line\":1,\"col\":1,\"offset\":0},\"end\":{\"line\":2,\"col\":0,\"offset\":11}}}]}"},
+}
+
+// TestInlineSliceState checks that text joins, splits, trims and takes
+// positions as it did when Str carried its own offset, with and without
+// source positions, and that a parse leaves no offset state behind for the
+// next.
+func TestInlineSliceState(t *testing.T) {
+	check := func(round int) {
+		for _, c := range sliceStateCases {
+			if got := string(ASTText(parseDoc([]byte(c.src), false))); got != c.plain {
+				t.Errorf("round %d, %q without positions:\n got %s\nwant %s", round, c.src, got, c.plain)
+			}
+			doc := parseDoc([]byte(c.src), true)
+			if got := string(ASTText(doc)); got != c.pos {
+				t.Errorf("round %d, %q with positions:\n got %s\nwant %s", round, c.src, got, c.pos)
+			}
+			j, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(j) != c.json {
+				t.Errorf("round %d, %q JSON:\n got %s\nwant %s", round, c.src, j, c.json)
+			}
+		}
+	}
+	check(1)
+	check(2)
 }
