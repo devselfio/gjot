@@ -5,7 +5,7 @@ below: the 26 djot.js suite files zjot vendors plus its own `grid.test` and
 `zjot.test`, 28 files, copied byte for byte from the repository below. They
 are never edited here: a failing case is a parser bug, not a fixture bug.
 
-Repository: https://github.com/quiteclose/zjot
+Repository: https://github.com/devselfio/zjot
 Ref: v2.0.0
 
 `Ref:` is the pin, and it must be a tag of the form `vN.N.N`, never a branch
