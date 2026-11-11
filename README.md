@@ -462,4 +462,9 @@ cmd/driftcheck              Corpus drift check against zjot
     `(*Header).ClassList()` (its classes in written order). `Node` keeps its
     unexported method, so only `ast`'s kinds implement it.
   - `Str` is 8 bytes smaller: the parse-time source offset it carried in an
-    unexported field is now kept by the inline parser while it runs.
+    unexported field is now kept by the inline parser while it runs, in a
+    map per leaf. That costs parsing: on the swarm worker's runner, six
+    interleaved `-count 1` samples each against fb07082 put `Corpus/Parse`
+    at about +12% ns/op (allocs/node 5.80 to 6.31, B/node 576 to 619) and
+    `Page/Parse` at about +17% (allocs/node 3.18 to 3.71, B/node 506 to
+    552). The other paths do not parse inside the timer.
