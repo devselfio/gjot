@@ -151,3 +151,35 @@ func TestReadmeHookCompiles(t *testing.T) {
 		t.Errorf("HTML with the hook lacks %q:\n%s", want, html)
 	}
 }
+
+// TestHookPrecedence pins which hook renders a node when more than one
+// could: of a node's registered classes the first in its source class list
+// wins, whatever order they were registered in, and registering a class
+// twice keeps the later hook.
+func TestHookPrecedence(t *testing.T) {
+	tag := func(name string) Hook {
+		return func(w io.Writer, n ast.Node, entering bool) (ast.WalkStatus, error) {
+			if entering {
+				io.WriteString(w, "<"+name+">")
+			} else {
+				io.WriteString(w, "</"+name+">\n")
+			}
+			return ast.WalkSkipChildren, nil
+		}
+	}
+	// Registered b before a; the div's classes read a then b.
+	got := renderWith(t, "::: a\n:::\n\n{.b .a}\n::: c\n:::\n\n{.a}\n::: b\n:::\n",
+		WithHook("b", tag("bee")), WithHook("a", tag("ay")))
+	// First div: only a. Second: classes b a c, so b. Third: classes a b, so a.
+	if want := "<ay></ay>\n<bee></bee>\n<ay></ay>\n"; got != want {
+		t.Errorf("source class order: got %q, want %q", got, want)
+	}
+	got = renderWith(t, "[x]{.s .t}\n", WithHook("t", tag("tee")), WithHook("s", tag("ess")))
+	if want := "<p><ess></ess>\n</p>\n"; got != want {
+		t.Errorf("span source class order: got %q, want %q", got, want)
+	}
+	got = renderWith(t, "::: a\n:::\n", WithHook("a", tag("first")), WithHook("a", tag("second")))
+	if want := "<second></second>\n"; got != want {
+		t.Errorf("re-registration: got %q, want %q", got, want)
+	}
+}
